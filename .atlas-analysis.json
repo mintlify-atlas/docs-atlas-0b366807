@@ -1,0 +1,120 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Logicore AI Framework",
+  "projectDescription": "An enterprise-grade Python framework for building autonomous, multi-provider AI agents with native tool execution, persistent memory, and zero vendor lock-in.",
+  "theme": "palm",
+  "primaryColor": "#2563EB",
+  "lightColor": "#DBEAFE",
+  "darkColor": "#1E3A8A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "concepts/agents/agents-overview",
+              "concepts/agents/agent",
+              "concepts/agents/basic-agent",
+              "concepts/agents/smart-agent"
+            ]
+          },
+          {
+            "group": "Providers",
+            "pages": [
+              "concepts/providers/providers-overview",
+              "concepts/providers/provider-ollama",
+              "concepts/providers/provider-openai",
+              "concepts/providers/provider-gemini",
+              "concepts/providers/provider-groq",
+              "concepts/providers/provider-azure"
+            ]
+          },
+          {
+            "group": "Tools",
+            "pages": [
+              "concepts/tools/tools-overview",
+              "concepts/tools/tools-custom",
+              "concepts/tools/tools-built-in"
+            ]
+          },
+          {
+            "group": "Memory",
+            "pages": [
+              "concepts/memory/memory-overview",
+              "concepts/memory/memory-short-term",
+              "concepts/memory/memory-long-term",
+              "concepts/memory/memory-simplemem-integration"
+            ]
+          },
+          {
+            "group": "Skills",
+            "pages": [
+              "concepts/skills/skills-overview",
+              "concepts/skills/skills-use-in-agents",
+              "concepts/skills/skills-build-custom"
+            ]
+          },
+          {
+            "group": "MCP Integration",
+            "pages": [
+              "concepts/mcp/mcp-overview",
+              "concepts/mcp/mcp-how-it-works",
+              "concepts/mcp/mcp-agent",
+              "concepts/mcp/mcp-dynamic-tools",
+              "concepts/mcp/mcp-examples"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/faq",
+              "resources/contribution-guide",
+              "resources/changelog"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Unified multi-provider architecture (Ollama, OpenAI, Gemini, Groq, Azure, Anthropic)",
+    "Native streaming with hidden reasoning token extraction",
+    "Zero-config tool integration via Python type hints and docstrings",
+    "Built-in persistent memory with semantic vector search (RAG)",
+    "Agent-aware cron job scheduler for autonomous background tasks",
+    "Pre-built skills (web_research, code_review, file_manipulation)",
+    "Model Context Protocol (MCP) integration for dynamic external tools",
+    "Flexible tool approval and safety workflows",
+    "Multi-session management with full conversation history",
+    "Built-in telemetry and observability"
+  ],
+  "publicApiSurface": [
+    "Agent",
+    "CopilotAgent",
+    "MCPAgent",
+    "SmartAgent",
+    "SmartAgentMode",
+    "BasicAgent",
+    "create_agent",
+    "tool",
+    "OllamaProvider",
+    "GroqProvider",
+    "GeminiProvider",
+    "AzureProvider",
+    "LLMProvider",
+    "MCPClientManager",
+    "SessionManager",
+    "TelemetryTracker",
+    "AgentrySimpleMem"
+  ]
+}
