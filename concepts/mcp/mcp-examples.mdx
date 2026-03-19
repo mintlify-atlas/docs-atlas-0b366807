@@ -1,0 +1,326 @@
+---
+title: "MCP examples"
+description: "Complete working examples covering normal mode, deferred mode, session management, lazy initialization, and common troubleshooting scenarios."
+---
+
+All examples use `await` and assume they are running inside an `async` function or an async entry point such as `asyncio.run()`.
+
+## Example 1: Small toolset — normal mode
+
+When the total number of tools (built-in defaults plus MCP tools) stays below `tool_threshold`, all tools are exposed to the model directly with no discovery step.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config_path="mcp.json",
+        tool_threshold=15,  # default; stays in normal mode when total tools < 15
+    )
+
+    await agent.init_mcp_servers()
+    response = await agent.chat("List available file tools")
+    print(response)
+
+asyncio.run(main())
+```
+
+**`mcp.json` for this example:**
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/project"],
+      "env": {}
+    }
+  }
+}
+```
+
+<Note>
+  The filesystem MCP server requires Node.js and `npx`. Install with `npm install -g @modelcontextprotocol/server-filesystem` or let `npx -y` install it on first run.
+</Note>
+
+---
+
+## Example 2: Large toolset — auto deferred mode
+
+When the combined tool count reaches `tool_threshold`, `MCPAgent` automatically switches to deferred mode. The model receives only `tool_search_regex` and must discover tools before calling them.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="openai",
+        model="gpt-4o-mini",
+        api_key="sk-...",
+        mcp_config_path="mcp.json",
+        tool_threshold=15,
+        debug=True,  # prints deferred mode decisions
+    )
+
+    await agent.init_mcp_servers()
+
+    # The model will call tool_search_regex first, then invoke the matching tools
+    response = await agent.chat("Find tools for reading docs and summarize the README")
+    print(response)
+
+asyncio.run(main())
+```
+
+With `debug=True` you will see log lines like:
+
+```
+[MCPAgent] [!] Total tools (22 = 8 default + 14 MCP) >= threshold (15)
+[MCPAgent] [*] Auto-enabling deferred tool mode for dynamic selection...
+[MCPAgent] [?] Tool search: 'readme|docs' -> 3 matches
+[MCPAgent] [*] Loaded: 3/22 tools
+```
+
+---
+
+## Example 3: Force deferred mode for small catalogs
+
+Set `deferred_tools=True` to always use deferred loading regardless of tool count. Useful when you want controlled, incremental tool exposure as a policy.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config_path="mcp.json",
+        deferred_tools=True,  # always deferred
+    )
+
+    await agent.init_mcp_servers()
+    response = await agent.chat("Search tools related to csv and parse a sample file")
+    print(response)
+
+asyncio.run(main())
+```
+
+---
+
+## Example 4: Lazy initialization on first chat
+
+Skip the explicit `init_mcp_servers()` call. The first `chat()` call triggers initialization automatically via `_lazy_init_mcp()`.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config_path="mcp.json",
+    )
+
+    # No explicit init call — MCP servers initialize on first chat
+    response = await agent.chat("Use MCP tools to inspect project files")
+    print(response)
+
+asyncio.run(main())
+```
+
+<Tip>
+  Lazy initialization is convenient for scripts, but for server applications call `init_mcp_servers()` explicitly at startup. This surfaces connection errors early and avoids first-request latency spikes.
+</Tip>
+
+---
+
+## Example 5: Session management for production
+
+Named sessions isolate conversation history per user, tenant, or workflow. Stale sessions can be cleaned up on a schedule.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        session_timeout=1800,  # 30 minutes
+    )
+
+    agent.set_session_callbacks(
+        on_session_created=lambda sid: print(f"[session] created: {sid}"),
+        on_session_destroyed=lambda sid: print(f"[session] destroyed: {sid}"),
+    )
+
+    agent.create_session("team-a", metadata={"tenant": "acme"})
+    await agent.chat("Store the design decisions from today", session_id="team-a")
+    summary = await agent.chat("Recap all decisions", session_id="team-a")
+    print(summary)
+
+    # Inspect active sessions
+    for s in agent.list_sessions():
+        print(s["session_id"], s["message_count"], s["last_activity"])
+
+    # Clean up sessions inactive for > 30 minutes
+    removed = agent.cleanup_stale_sessions()
+    print(f"Cleaned {removed} stale sessions")
+
+asyncio.run(main())
+```
+
+---
+
+## Example 6: Custom MCP server
+
+You can connect to any MCP-compatible server by declaring it in `mcp.json`. This example shows a Python-based custom server started via `python`.
+
+**`mcp.json`:**
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "python",
+      "args": ["-m", "my_mcp_server"],
+      "env": {
+        "DATABASE_URL": "postgresql://localhost/mydb"
+      }
+    }
+  }
+}
+```
+
+**Agent setup:**
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config_path="mcp.json",
+        debug=True,
+    )
+
+    await agent.init_mcp_servers()
+    response = await agent.chat("Query the users table and summarize the results")
+    print(response)
+
+asyncio.run(main())
+```
+
+---
+
+## Example 7: Inline config (no mcp.json file)
+
+Pass the server configuration as a dict to avoid a file on disk — useful in containerized or test environments.
+
+```python
+import asyncio
+from logicore.agents.agent_mcp import MCPAgent
+
+MCP_CONFIG = {
+    "mcpServers": {
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "env": {},
+        }
+    }
+}
+
+async def main():
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config=MCP_CONFIG,  # dict, not a file path
+    )
+
+    await agent.init_mcp_servers()
+    response = await agent.chat("List the contents of /tmp")
+    print(response)
+
+asyncio.run(main())
+```
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="MCPAgent returns None">
+    `chat()` returns `None` when `max_iterations` is reached without a final assistant message. This usually means the agent is stuck in a tool-call loop.
+
+    **Steps to diagnose:**
+    1. Set `debug=True` to see the full tool execution trace.
+    2. Increase `max_iterations` temporarily to confirm the agent eventually resolves.
+    3. Check that your MCP server tools are returning results in a format the model understands.
+    4. If in deferred mode, verify tool descriptions are clear enough for regex discovery.
+  </Accordion>
+
+  <Accordion title="MCP server fails to connect">
+    Common causes and fixes:
+
+    - **Command not found**: The `command` in `mcp.json` must be on `PATH` or an absolute path. Use `which npx` or `which python` to verify. `MCPClientManager` calls `shutil.which()` to resolve the path, but if the command is missing entirely it will fail.
+    - **Timeout (10 s)**: The server process takes too long to start. The manager logs `[MCP Client] Timeout connecting to <name>` and moves on. Check that the command exits quickly during initialization.
+    - **Initialization error**: Look for `[MCP Client] Connection error for <name>: ...` in the output. Usually indicates a crash in the server process — check the server's own logs.
+
+    Enable `debug=True` on `MCPAgent` to see connection status lines:
+    ```
+    [MCP Client] Connected to server: filesystem
+    [MCP Client] Found 12 tools from filesystem
+    ```
+  </Accordion>
+
+  <Accordion title="Tools not appearing in deferred mode">
+    If the model cannot find tools via `tool_search_regex`:
+
+    1. Confirm `_mcp_initialized` is `True` by checking `agent.get_registry_stats()`.
+    2. Verify that `total_registered > 0` in the stats output.
+    3. Use `pattern=".*"` in a manual search to list all registered tools:
+
+    ```python
+    # Debug: list everything in the registry
+    stats = agent.get_registry_stats()
+    print(stats["tool_names"])
+    ```
+
+    4. If the registry is empty, `init_mcp_servers()` may have silently failed — check for exceptions with `debug=True`.
+  </Accordion>
+
+  <Accordion title="Session does not exist error">
+    `ValueError: Session <id> does not exist` is raised when `create_if_missing=False` and the session has not been created.
+
+    Either:
+    - Call `agent.create_session(session_id)` before `chat()`, or
+    - Keep the default `create_if_missing=True`.
+
+    ```python
+    # Explicit creation before chat
+    agent.create_session("user-99")
+    await agent.chat("Hello", session_id="user-99", create_if_missing=False)
+    ```
+  </Accordion>
+
+  <Accordion title="API key errors with cloud providers">
+    When using `provider="openai"`, `"groq"`, or `"gemini"`, `api_key` is required. Missing or invalid keys produce authentication errors from the provider.
+
+    ```python
+    import os
+    agent = MCPAgent(
+        provider="openai",
+        model="gpt-4o-mini",
+        api_key=os.environ["OPENAI_API_KEY"],  # never hardcode keys
+    )
+    ```
+  </Accordion>
+</AccordionGroup>

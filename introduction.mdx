@@ -1,0 +1,174 @@
+---
+title: "Introduction"
+description: "Build production-grade AI agents with native tool execution, multi-provider support, and zero vendor lock-in."
+---
+
+## Welcome to Logicore
+
+**Logicore** is an enterprise-grade Python framework for building intelligent, autonomous AI agents that work seamlessly across any LLM provider — whether local (Ollama), cloud-based (OpenAI, Gemini, Azure, Groq), or hybrid.
+
+Write your agent logic once. Deploy it against any provider without changing a single line of code.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a working agent running in under 5 minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Logicore with your preferred provider
+  </Card>
+  <Card title="Agents" icon="robot" href="/concepts/agents/agents-overview">
+    Explore the Agent, SmartAgent, and BasicAgent classes
+  </Card>
+  <Card title="Providers" icon="server" href="/concepts/providers/providers-overview">
+    Ollama, OpenAI, Gemini, Groq, Azure — all supported
+  </Card>
+</CardGroup>
+
+---
+
+## What Logicore solves
+
+| Challenge | Traditional approach | Logicore solution |
+|-----------|---------------------|-------------------|
+| **Provider lock-in** | Choose OpenAI → rewrite for Gemini → rewrite for Ollama | Write once, swap providers with a single parameter |
+| **Tool complexity** | Manual JSON schema generation, parameter validation, error handling | Auto-generate schemas from Python docstrings and type hints |
+| **Token management** | Manual streaming, no reasoning extraction | Native streaming with hidden `<think>` reasoning token extraction |
+| **Memory systems** | DIY vector DBs, RAG pipelines, session management | Built-in persistent memory with semantic search |
+| **Scheduling** | External cron, Celery, AWS Lambda dependencies | Native agent-aware cron scheduler |
+| **Approval and safety** | Custom approval workflows, tool restriction layers | Declarative approval system with per-tool policies |
+
+---
+
+## Core capabilities
+
+<CardGroup cols={2}>
+  <Card title="Multi-provider orchestration" icon="shuffle">
+    Switch between Ollama, OpenAI, Gemini, Groq, Azure, and Anthropic without touching your agent logic.
+  </Card>
+  <Card title="Zero-config tool integration" icon="wrench">
+    Turn any Python function into an LLM-callable tool. Logicore parses type hints and docstrings into JSON schemas automatically.
+  </Card>
+  <Card title="Native streaming + reasoning" icon="bolt">
+    Real-time token streaming with extraction of hidden `<think>` reasoning tokens from local models like DeepSeek and Qwen.
+  </Card>
+  <Card title="Persistent memory and RAG" icon="database">
+    Long-term conversational memory and semantic vector search so agents never lose context across sessions.
+  </Card>
+  <Card title="Built-in cron scheduler" icon="clock">
+    Agents can schedule, manage, and execute their own background tasks without external infrastructure.
+  </Card>
+  <Card title="Skills and pre-built capabilities" icon="stars">
+    Load domain-specific skill packs instantly: web research, code review, file manipulation, and more.
+  </Card>
+  <Card title="MCP integration" icon="plug">
+    Connect to Model Context Protocol servers for dynamic external tools without any custom code.
+  </Card>
+  <Card title="Telemetry and observability" icon="chart-line">
+    Full execution logs, telemetry, and debugging hooks for production monitoring and audit trails.
+  </Card>
+</CardGroup>
+
+---
+
+## Architecture overview
+
+Logicore uses a layered design that keeps your business logic separate from provider-specific plumbing:
+
+```
+Your Agent + Business Logic
+        ↓
+Agent Orchestration
+(session management, tool execution loop, approval workflows, telemetry)
+        ↓
+Unified Provider Gateway
+(streaming normalization, tool calling interface, error recovery)
+        ↓
+Provider Backends
+Ollama | OpenAI | Gemini | Groq | Azure | Anthropic
+```
+
+Each layer has a single responsibility. Provider backends communicate through a unified interface, so swapping from local to cloud inference is a one-line change.
+
+---
+
+## Quick example
+
+```python quickstart.py
+import asyncio
+from logicore.agents.agent import Agent
+
+def check_weather(location: str, **kwargs) -> str:
+    """Checks the current weather for a specific location."""
+    if "seattle" in location.lower():
+        return "72°F and sunny."
+    return "65°F and cloudy."
+
+async def main():
+    agent = Agent(
+        llm="ollama",
+        role="Weather Assistant",
+        tools=[check_weather]
+    )
+    agent.set_auto_approve_all(True)
+
+    response = await agent.chat("What's the weather in Seattle?")
+    print(response["content"])
+
+asyncio.run(main())
+```
+
+Switch to a cloud provider by changing one argument:
+
+```python
+agent = Agent(llm="openai", tools=[check_weather])   # OpenAI
+agent = Agent(llm="gemini", tools=[check_weather])   # Google Gemini
+agent = Agent(llm="groq",   tools=[check_weather])   # Groq fast inference
+```
+
+---
+
+## Why Logicore
+
+<AccordionGroup>
+  <Accordion title="vs. LangChain">
+    - **Simpler API**: Less boilerplate, more intuitive
+    - **Native streaming**: Built-in, not an afterthought
+    - **Zero vendor lock-in**: LangChain favors OpenAI
+    - **Type-safe tools**: Auto-schema from Python type hints, not manual YAML
+  </Accordion>
+  <Accordion title="vs. AutoGen">
+    - **Lightweight**: No complex role definitions — agent equals logic
+    - **Real-time streaming**: Full token-level feedback
+    - **Multi-provider native**: AutoGen is biased toward Azure/OpenAI
+    - **Better memory**: Semantic search and vector DB built-in
+  </Accordion>
+  <Accordion title="vs. OpenAI Assistants API">
+    - **Open-source and local**: Not locked to OpenAI infrastructure
+    - **Full control**: Agents run in your process, not the cloud
+    - **Cost predictable**: No per-API-call billing; use any provider
+    - **Custom logic**: Agents execute Python directly, not sandboxed
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Installation
+
+```bash
+pip install logicore
+```
+
+Install with provider extras:
+
+```bash
+pip install "logicore[ollama]"     # Local models
+pip install "logicore[gemini]"     # Google Gemini
+pip install "logicore[groq]"       # Groq fast inference
+pip install "logicore[azure]"      # Azure OpenAI
+pip install "logicore[anthropic]"  # Anthropic Claude
+pip install "logicore[all]"        # All providers
+```
+
+<Tip>
+  New to Logicore? Start with the [Quickstart](/quickstart) to get a working agent in 5 minutes.
+</Tip>

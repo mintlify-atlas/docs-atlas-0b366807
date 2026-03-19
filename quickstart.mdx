@@ -1,80 +1,341 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Go from zero to a running Logicore agent with tools, streaming, and multi-turn conversation in minutes."
 ---
 
-## Get started in three steps
+This guide walks through the core building blocks: creating an agent, registering a tool, streaming output, controlling tool approval, and holding a multi-turn conversation.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
 
-### Step 1: Set up your local environment
+<Step title="Install Logicore">
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash
+pip install logicore
+```
 
-### Step 2: Deploy your changes
+For local models, also install the Ollama extra and pull a model:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+```bash
+pip install "logicore[ollama]"
+ollama run qwen3.5:0.8b
+```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+See the [Installation guide](/installation) for all provider options and environment variable setup.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+</Step>
 
-### Step 3: Go live
+<Step title="Create your first agent">
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+An `Agent` takes a provider string or a provider instance and responds to `chat()` calls:
+
+```python
+from logicore.agents.agent import Agent
+import asyncio
+
+async def main():
+    # Pass a provider name as a string: "ollama", "gemini", "groq", "azure", "anthropic"
+    agent = Agent(llm="ollama")
+
+    response = await agent.chat("What is an AI agent?")
+    print(response['content'])
+
+asyncio.run(main())
+```
+
+Run it:
+
+```bash
+python agent.py
+```
+
+The `Agent` constructor accepts several optional parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `llm` | `"ollama"` | Provider string or `LLMProvider` instance |
+| `model` | `None` | Model name override |
+| `role` | `"general"` | Shapes the system prompt persona |
+| `system_message` | `None` | Custom system prompt (overrides `role`) |
+| `tools` | `[]` | List of Python callables to register |
+| `max_iterations` | `40` | Max tool-call loop iterations |
+| `debug` | `False` | Verbose logging |
+| `memory` | `False` | Enable persistent memory |
+| `context_compression` | `False` | Summarize old messages when context grows long |
+
+</Step>
+
+<Step title="Add a tool">
+
+Tools are plain Python functions. Logicore reads the function signature, type hints, and docstring to build the JSON schema that gets sent to the LLM — no decorators or schema files needed.
+
+```python
+def check_weather(location: str, unit: str = "fahrenheit", **kwargs) -> dict:
+    """
+    Fetches the current weather for a specific location.
+
+    Args:
+        location (str): The city or zip code to look up.
+        unit (str): The temperature unit. Options: 'fahrenheit', 'celsius'.
+
+    Returns:
+        dict: Weather information with temperature and conditions.
+    """
+    if "seattle" in location.lower():
+        return {"temperature": 72, "conditions": "sunny", "unit": unit}
+    return {"temperature": 65, "conditions": "cloudy", "unit": unit}
+```
+
+<Tip>
+  Always include `**kwargs` in tool signatures. Local models sometimes generate extra parameters that aren't in the schema; `**kwargs` absorbs them gracefully instead of raising a `TypeError`.
+</Tip>
+
+Register the function by passing it to the `tools` list:
+
+```python
+from logicore.agents.agent import Agent
+import asyncio
+
+def check_weather(location: str, unit: str = "fahrenheit", **kwargs) -> dict:
+    """Fetches the current weather for a specific location."""
+    if "seattle" in location.lower():
+        return {"temperature": 72, "conditions": "sunny", "unit": unit}
+    return {"temperature": 65, "conditions": "cloudy", "unit": unit}
+
+async def main():
+    agent = Agent(
+        llm="ollama",
+        tools=[check_weather]
+    )
+
+    response = await agent.chat("What's the weather in Seattle?")
+    print(response['content'])
+
+asyncio.run(main())
+```
+
+The agent now:
+1. Receives the user question
+2. Decides whether to call `check_weather`
+3. Executes the function and captures the return value
+4. Synthesizes a final natural-language answer
+
+### How schema auto-generation works
+
+Logicore converts your function into a JSON schema automatically:
+
+<CodeGroup>
+
+```python your function
+def check_weather(location: str, unit: str = "fahrenheit", **kwargs) -> dict:
+    """Fetches the current weather for a specific location."""
+    ...
+```
+
+```json generated schema
+{
+  "type": "function",
+  "function": {
+    "name": "check_weather",
+    "description": "Fetches the current weather for a specific location.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "The city or zip code to look up."
+        },
+        "unit": {
+          "type": "string",
+          "description": "The temperature unit. Options: 'fahrenheit', 'celsius'.",
+          "default": "fahrenheit"
+        }
+      },
+      "required": ["location"]
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+The conversion rules are:
+
+- **Type hints** → JSON Schema types (`str` → `"string"`, etc.)
+- **Docstring `Args:` block** → per-parameter `description` fields
+- **Default values** → parameters are excluded from `required`
+- **`**kwargs`** → absorbs any extra parameters the LLM hallucinates
+
+</Step>
+
+<Step title="Enable streaming">
+
+Pass an `on_token` callback and `stream=True` to receive tokens as they arrive instead of waiting for the full response:
+
+```python
+async def main():
+    agent = Agent(llm="ollama", tools=[check_weather])
+
+    def on_token(token):
+        print(token, end="", flush=True)
+
+    response = await agent.chat(
+        "What's the weather in Seattle?",
+        callbacks={"on_token": on_token},
+        stream=True
+    )
+    print("\nFinal:", response['content'])
+
+asyncio.run(main())
+```
+
+The `on_token` callback fires for every token in the streaming response. `response['content']` still holds the complete assembled text when the call returns.
+
+</Step>
+
+<Step title="Control tool approval">
+
+By default, tools require approval before execution. For development and safe read-only tools, enable auto-approval:
+
+```python
+agent = Agent(llm="ollama", tools=[check_weather])
+agent.set_auto_approve_all(True)  # All tools execute without a confirmation prompt
+
+response = await agent.chat("What's the weather in Seattle?")
+```
+
+For finer control, provide a custom approval callback. The callback receives the session ID, tool name, and call arguments, and returns `True` to allow or `False` to deny:
+
+```python
+async def approve_tool(session_id, tool_name, args):
+    if tool_name == "delete_file":
+        return False  # Deny destructive operations
+    return True  # Auto-approve everything else
+
+agent.set_callbacks(on_tool_approval=approve_tool)
+```
+
+<Warning>
+  Never auto-approve tools that write to disk, execute shell commands, or make network requests in production. Use a custom approval callback to gate those operations.
+</Warning>
+
+</Step>
+
+<Step title="Hold a multi-turn conversation">
+
+Agents accumulate conversation history across `chat()` calls automatically. Each turn sees the full prior context:
+
+```python
+agent = Agent(llm="ollama", tools=[check_weather])
+
+# Turn 1
+response1 = await agent.chat("What's the weather in Seattle?")
+
+# Turn 2 — agent remembers the Seattle result
+response2 = await agent.chat("How about New York?")
+
+# Turn 3 — agent compares both results from history
+response3 = await agent.chat("Which city is warmer?")
+print(response3['content'])
+```
+
+Each turn is appended to the session's message list. No extra configuration is needed for basic multi-turn use.
+
+</Step>
+
+</Steps>
+
+## Complete working example
+
+The following puts all the pieces together: a named role, a tool, streaming, and auto-approval:
+
+```python
+from logicore.agents.agent import Agent
+import asyncio
+
+def check_weather(location: str, unit: str = "fahrenheit", **kwargs) -> dict:
+    """Fetches the current weather for a specific location."""
+    if "seattle" in location.lower():
+        return {"temperature": 72, "conditions": "sunny", "unit": unit}
+    return {"temperature": 65, "conditions": "cloudy", "unit": unit}
+
+async def main():
+    agent = Agent(
+        llm="ollama",
+        tools=[check_weather],
+        role="Weather Assistant",
+        system_message="Use the check_weather tool to answer weather questions."
+    )
+    agent.set_auto_approve_all(True)
+
+    def on_token(token):
+        print(token, end="", flush=True)
+
+    response = await agent.chat(
+        "What's the weather in Seattle?",
+        callbacks={"on_token": on_token},
+        stream=True
+    )
+
+    print("\n\nFinal response:", response['content'])
+
+asyncio.run(main())
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+<CardGroup cols={3}>
+  <Card title="Concepts" icon="book-open" href="/concepts/agents">
+    Understand agents, skills, sessions, and memory in depth.
+  </Card>
+  <Card title="Skills" icon="puzzle" href="/concepts/skills">
+    Load pre-built capability packs for web research, code review, and more.
+  </Card>
+  <Card title="API reference" icon="code" href="/concepts/">
+    Complete reference for all classes and methods.
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="Agent not using the tool">
+
+- Confirm the tool is in the `tools` list: `tools=[check_weather]`
+- Make sure the function has a docstring — Logicore uses it as the tool description sent to the LLM
+- Enable debug logging: `Agent(..., debug=True)` to see the full tool schema and LLM requests
+
+</Accordion>
+
+<Accordion title="TypeError from hallucinated parameters">
+
+Local models (Ollama) occasionally generate parameter names that aren't in the schema. Add `**kwargs` to your tool function to absorb them:
+
+```python
+def my_tool(param: str, **kwargs) -> dict:
+    ...
+```
+
+</Accordion>
+
+<Accordion title="Tool execution hangs">
+
+- Check that your tool function doesn't block the event loop. Use `async def` and `await` for I/O-bound work.
+- Set `max_iterations` to a lower value to prevent the agent from looping indefinitely: `Agent(..., max_iterations=5)`
+
+</Accordion>
+
+<Accordion title="Provider connection errors">
+
+| Provider | Fix |
+|---|---|
+| Ollama | Run `ollama serve` to start the local server |
+| OpenAI | Set the `OPENAI_API_KEY` environment variable |
+| Azure | Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_KEY` |
+| Gemini | Set `GEMINI_API_KEY` |
+| Anthropic | Set `ANTHROPIC_API_KEY` |
+| Groq | Set `GROQ_API_KEY` |
+
+</Accordion>
+
+</AccordionGroup>

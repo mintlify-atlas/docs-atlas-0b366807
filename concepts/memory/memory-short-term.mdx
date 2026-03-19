@@ -1,0 +1,219 @@
+---
+title: "Short-Term Memory"
+description: "How Logicore stores and manages per-session conversation history using AgentSession and SessionManager."
+---
+
+Short-term memory is the in-session message history that gives an agent conversational continuity within a single run. It is always active — no configuration required.
+
+## How It Works
+
+Every `Agent` instance maintains a dictionary of sessions keyed by `session_id`. Each session holds the full message list exchanged since the session was created or last cleared.
+
+<Steps>
+  <Step title="Session is resolved">
+    When `agent.chat()` is called with a `session_id`, the agent looks up the existing session or creates a new one. If no `session_id` is provided, a default session is used.
+  </Step>
+  <Step title="User message is appended">
+    The incoming user message is added to `session.messages` as a `{"role": "user", "content": "..."}` dict.
+  </Step>
+  <Step title="LLM receives accumulated history">
+    The full `session.messages` list — including the system prompt, all prior turns, and any tool results — is sent to the LLM provider.
+  </Step>
+  <Step title="Response is appended">
+    The assistant response and any tool call outputs are appended back to `session.messages`, keeping the history intact for the next turn.
+  </Step>
+</Steps>
+
+## Session APIs
+
+The agent exposes several methods for working with sessions directly.
+
+### Starting a conversation
+
+```python
+from logicore.agents.agent import Agent
+
+agent = Agent(llm="ollama")
+
+# Uses the default session
+await agent.chat("Hello")
+
+# Explicit session ID for isolated context
+await agent.chat("Plan sprint tasks", session_id="team-a")
+await agent.chat("Add a review task", session_id="team-a")  # continues the same thread
+
+# A separate session has no knowledge of team-a's history
+await agent.chat("What is the plan?", session_id="team-b")
+```
+
+### Inspecting session history
+
+```python
+# Get the session object
+session = agent.get_session("team-a")
+
+# Total messages (system + user + assistant + tool turns)
+print(len(session.messages))
+
+# Inspect individual messages
+for msg in session.messages:
+    print(msg["role"], ":", str(msg["content"])[:80])
+```
+
+### Clearing session history
+
+`clear_session()` resets the message list for a session while retaining the session entry itself.
+
+```python
+# Clear short-term memory for a specific session
+agent.clear_session("team-a")
+
+# Subsequent chats in that session start fresh
+await agent.chat("What was the plan?", session_id="team-a")
+# The agent no longer has access to the previous conversation
+```
+
+<Note>
+  `clear_session()` only removes the in-memory message history. If long-term memory (`memory=True`) is also enabled, facts already persisted to LanceDB are not deleted. Use `agent.simplemem.clear_memories()` to wipe vector storage.
+</Note>
+
+## Context Window Management
+
+As conversations grow, the accumulated message history can approach the LLM's context limit. Logicore handles this with `ContextMiddleware`, which is wired into the agent's chat loop.
+
+### How `ContextMiddleware` works
+
+`ContextMiddleware` estimates the token count of the current message list using a character-length heuristic (1 token ≈ 4 characters). When the count exceeds the configured threshold, it compresses the oldest messages into a summary.
+
+```
+Input messages:  [system] [turn 1] [turn 2] ... [turn N-10] [turn N-9] ... [turn N]
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+                             summarized into one system message
+
+Output messages: [system] [summary] [turn N-9] ... [turn N]
+                                    ^^^^^^^^^^^^^^^^^^^^^^^
+                                    10 most recent turns preserved as-is
+```
+
+The summary is injected as a `"role": "system"` message so the LLM treats it as authoritative background context.
+
+### Configuring the threshold
+
+The `context_compression` parameter on the `Agent` constructor controls when compression activates. Pass an integer token count:
+
+```python
+from logicore.agents.agent import Agent
+
+agent = Agent(
+    llm="ollama",
+    context_compression=80000   # compress when estimated tokens exceed 80k
+)
+```
+
+<Tip>
+  The default threshold is 200,000 tokens — high enough to avoid triggering compression on most conversations. Lower it for models with smaller context windows or to reduce latency.
+</Tip>
+
+`ContextMiddleware` always preserves the 10 most recent messages verbatim (`preserve_recent_count = 10`) to avoid disrupting the immediate conversational flow.
+
+## Multi-Session Management with `SessionManager`
+
+For applications that need to persist sessions across process restarts (CLI tools, long-running services), Logicore provides `SessionManager` backed by SQLite.
+
+```python
+from logicore.session_manager import SessionManager, SessionStorage
+
+# Use a custom database path
+storage = SessionStorage(db_path="/var/data/my_app.db")
+manager = SessionManager(storage=storage)
+
+# Save messages from a completed session
+manager.save_session(
+    session_id="user-42-sprint",
+    messages=session.messages,
+    metadata={"provider": "ollama", "model": "llama3.2"}
+)
+
+# Restore messages in a new process
+restored_messages = manager.load_session("user-42-sprint")
+
+# List all active sessions
+for s in manager.list_sessions():
+    print(s["session_id"], "-", s.get("title"), "(", s["message_count"], "turns)")
+```
+
+### `SessionManager` Methods
+
+<Accordion title="save_session(session_id, messages, metadata)">
+  Persists the message list and optional metadata to the SQLite `agent_state` table. Creates the session record if it does not exist, then updates the `last_activity` timestamp.
+
+  ```python
+  manager.save_session(
+      session_id="my-session",
+      messages=[{"role": "user", "content": "Hello"}],
+      metadata={"title": "Intro chat", "model": "llama3.2"}
+  )
+  ```
+</Accordion>
+
+<Accordion title="load_session(session_id)">
+  Returns the saved message list for a session, or an empty list if the session does not exist.
+
+  ```python
+  messages = manager.load_session("my-session")
+  ```
+</Accordion>
+
+<Accordion title="list_sessions()">
+  Returns all sessions that have at least one user message, ordered by `last_activity` descending. Each entry includes `session_id`, `title`, `provider`, `model`, `message_count`, and timestamps.
+
+  ```python
+  sessions = manager.list_sessions()
+  ```
+</Accordion>
+
+<Accordion title="delete_session(session_id)">
+  Clears the saved message list for the session by setting it to an empty list.
+
+  ```python
+  manager.delete_session("my-session")
+  ```
+</Accordion>
+
+<Accordion title="session_exists(session_id)">
+  Returns `True` if the session has a saved state entry, `False` otherwise.
+
+  ```python
+  if manager.session_exists("my-session"):
+      messages = manager.load_session("my-session")
+  ```
+</Accordion>
+
+<Accordion title="update_session_title(session_id, title)">
+  Updates the human-readable title stored in session metadata.
+
+  ```python
+  manager.update_session_title("my-session", "Sprint planning - week 12")
+  ```
+</Accordion>
+
+## Session Isolation
+
+Different `session_id` values are always fully isolated from each other:
+
+- They do not share message history.
+- Clearing one session has no effect on others.
+- The same agent instance can hold many concurrent sessions simultaneously.
+
+```python
+# Two separate contexts on one agent instance
+await agent.chat("I'm Alice", session_id="alice")
+await agent.chat("I'm Bob",   session_id="bob")
+
+alice_session = agent.get_session("alice")
+bob_session   = agent.get_session("bob")
+
+# Alice's session has no knowledge of Bob
+print(alice_session.messages)  # only Alice's turns
+print(bob_session.messages)    # only Bob's turns
+```

@@ -1,0 +1,284 @@
+---
+title: "Installation"
+description: "Install Logicore and configure your LLM provider to start building intelligent agents."
+---
+
+Logicore works with local models via Ollama and all major cloud providers. Install the core package, add your provider extras, and set your credentials.
+
+<Info>
+  Logicore requires **Python 3.10 or later** (3.10, 3.11, 3.12, and 3.13 are all tested and supported).
+</Info>
+
+## Prerequisites
+
+Before installing, you need:
+
+- **Python 3.10+** — Check with `python --version`
+- **An LLM provider** — Either [Ollama](https://ollama.com) installed locally, or API credentials for a cloud provider (Gemini, Groq, Azure OpenAI, or Anthropic)
+
+<Steps>
+
+<Step title="Create a virtual environment">
+
+Isolate your dependencies using a virtual environment:
+
+<CodeGroup>
+
+```bash venv
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+```bash conda
+conda create -n logicore-env python=3.11
+conda activate logicore-env
+```
+
+</CodeGroup>
+
+</Step>
+
+<Step title="Install the core package">
+
+Install the base Logicore framework:
+
+```bash
+pip install logicore
+```
+
+The core package includes `pydantic`, `requests`, and `python-dotenv`. Provider clients and optional tool dependencies are installed separately as extras.
+
+</Step>
+
+<Step title="Install provider extras">
+
+Install only the extras you need. Each extra pulls in the official client library for that provider.
+
+<Tabs>
+
+<Tab title="Ollama (local)">
+
+```bash
+pip install "logicore[ollama]"
+```
+
+Then pull a model before running agents:
+
+```bash
+ollama run qwen3.5:0.8b
+```
+
+<Tip>
+  Start Ollama in the background with `ollama serve` if it isn't already running as a system service.
+</Tip>
+
+</Tab>
+
+<Tab title="Gemini">
+
+```bash
+pip install "logicore[gemini]"
+```
+
+Installs `google-genai>=1.0`.
+
+</Tab>
+
+<Tab title="Groq">
+
+```bash
+pip install "logicore[groq]"
+```
+
+Installs `groq>=0.4`.
+
+</Tab>
+
+<Tab title="Azure OpenAI">
+
+```bash
+pip install "logicore[azure]"
+```
+
+Installs `openai>=1.0` and `httpx>=0.24`.
+
+</Tab>
+
+<Tab title="Anthropic">
+
+```bash
+pip install "logicore[anthropic]"
+```
+
+Installs `anthropic>=0.20`.
+
+</Tab>
+
+<Tab title="MCP">
+
+```bash
+pip install "logicore[mcp]"
+```
+
+Installs `mcp>=0.9` to connect agents to Model Context Protocol servers.
+
+</Tab>
+
+<Tab title="Built-in tools">
+
+```bash
+pip install "logicore[tools]"
+```
+
+Installs document-handling dependencies: `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, and `playwright` for browser automation.
+
+</Tab>
+
+<Tab title="Everything">
+
+```bash
+pip install "logicore[all]"
+```
+
+Installs all provider clients, tool dependencies, and the hot-reloader (`watchdog`).
+
+</Tab>
+
+</Tabs>
+
+</Step>
+
+<Step title="Set environment variables">
+
+Cloud providers require API credentials. Set these before running any agent.
+
+<Tabs>
+
+<Tab title="Gemini">
+
+```bash
+export GEMINI_API_KEY="your-api-key"
+```
+
+</Tab>
+
+<Tab title="Groq">
+
+```bash
+export GROQ_API_KEY="your-api-key"
+```
+
+</Tab>
+
+<Tab title="Azure OpenAI">
+
+```bash
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_KEY="your-api-key"
+```
+
+</Tab>
+
+<Tab title="Anthropic">
+
+```bash
+export ANTHROPIC_API_KEY="your-api-key"
+```
+
+</Tab>
+
+<Tab title="OpenAI">
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+```
+
+</Tab>
+
+</Tabs>
+
+<Tip>
+  Store credentials in a `.env` file at your project root. Logicore loads it automatically via `python-dotenv`.
+</Tip>
+
+</Step>
+
+<Step title="Verify the installation">
+
+Create a `verify.py` script to confirm everything is wired up correctly:
+
+```python
+import asyncio
+from logicore.providers.ollama_provider import OllamaProvider
+from logicore.agents.agent import Agent
+
+async def main():
+    provider = OllamaProvider(model_name="qwen3.5:0.8b")
+    agent = Agent(llm=provider, role="Greeter")
+    response = await agent.chat("Say hello!")
+    print(response['content'])
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run it:
+
+```bash
+python verify.py
+```
+
+You should see a greeting printed to the terminal. If you see an error, check the troubleshooting notes below.
+
+</Step>
+
+</Steps>
+
+## Optional extras reference
+
+| Extra | Installs | Use case |
+|---|---|---|
+| `ollama` | `ollama>=0.1` | Local models (no API key required) |
+| `gemini` | `google-genai>=1.0` | Google Gemini models |
+| `groq` | `groq>=0.4` | Groq inference API |
+| `azure` | `openai>=1.0`, `httpx>=0.24` | Azure OpenAI deployments |
+| `anthropic` | `anthropic>=0.20` | Anthropic Claude models |
+| `mcp` | `mcp>=0.9` | Model Context Protocol servers |
+| `tools` | `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, `playwright` | Built-in document and browser tools |
+| `all` | Everything above + `watchdog` | Full install |
+
+## Common installation issues
+
+<AccordionGroup>
+
+<Accordion title="Ollama connection refused">
+
+Logicore can't reach the Ollama server. Start it with:
+
+```bash
+ollama serve
+```
+
+Ollama listens on `http://localhost:11434` by default.
+
+</Accordion>
+
+<Accordion title="Missing provider package error">
+
+If you see an `ImportError` for a provider (e.g., `No module named 'groq'`), you installed the base package without the extras. Fix it:
+
+```bash
+pip install "logicore[groq]"
+```
+
+Replace `groq` with whichever provider you're using.
+
+</Accordion>
+
+<Accordion title="Python version below 3.10">
+
+Logicore uses structural pattern matching and union type syntax that require Python 3.10+. Upgrade Python or create a new virtual environment with a supported version.
+
+</Accordion>
+
+</AccordionGroup>

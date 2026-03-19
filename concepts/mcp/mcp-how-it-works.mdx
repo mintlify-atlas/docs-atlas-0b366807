@@ -1,0 +1,156 @@
+---
+title: "How MCP works"
+description: "Internal execution flow from server connection and tool discovery through to tool call routing inside MCPAgent."
+---
+
+This page explains the runtime architecture used by `MCPAgent` and `MCPClientManager`: how servers are connected, how tools are discovered, and how calls are routed.
+
+## End-to-end flow
+
+```
+Create MCPAgent
+     |
+     v
+MCP config provided?
+  No  --> Normal chat with local tools
+  Yes --> Connect MCP servers (MCPClientManager)
+              |
+              v
+         List tools from each server
+              |
+              v
+         Merge internal + MCP tool schemas
+              |
+              v
+         Total tools >= tool_threshold?
+           No  --> Expose all tools to the model
+           Yes --> Deferred mode: expose tool_search_regex + loaded tools
+              |
+              v
+         Chat + tool loop
+              |
+              v
+         Tool called?
+           Internal --> Execute locally
+           MCP tool --> Route to owning MCP server via MCPClientManager
+              |
+              v
+         Final assistant response
+```
+
+## MCPClientManager
+
+`MCPClientManager` is the connection layer between `MCPAgent` and the outside world. It is initialised with either a path to `mcp.json` or an in-memory config dict.
+
+```python
+from logicore.mcp_client import MCPClientManager
+
+manager = MCPClientManager(config_path="mcp.json")
+# or pass config inline:
+manager = MCPClientManager(config={"mcpServers": { ... }})
+```
+
+### Key attributes
+
+| Attribute | Type | Description |
+|---|---|---|
+| `config_path` | `str` | Path to `mcp.json` on disk. |
+| `config` | `dict` | In-memory config (takes precedence over file). |
+| `sessions` | `Dict[str, ClientSession]` | Active MCP sessions keyed by server name. |
+| `server_tools_map` | `Dict[str, str]` | Maps `tool_name` → `server_name` for routing. |
+| `server_tasks` | `Dict[str, asyncio.Task]` | Background tasks that keep connections alive. |
+| `server_stop_events` | `Dict[str, asyncio.Event]` | Signals used to cleanly shut down connections. |
+
+### Server connection
+
+`connect_to_servers()` iterates every entry in `mcpServers`, skips servers whose name starts with `"logicore"` (to avoid recursion), and skips already-connected servers. For each remaining server it:
+
+<Steps>
+  <Step title="Reads command, args, and env from config">
+    Environment variables from the config are merged on top of the current process environment.
+  </Step>
+  <Step title="Resolves the command path">
+    Uses `shutil.which()` to find the full path, falling back to the raw string if not found.
+  </Step>
+  <Step title="Starts a background asyncio task">
+    `_run_server_connection()` opens a `stdio_client`, creates a `ClientSession`, calls `session.initialize()`, and then waits on a stop event — keeping the connection alive for the lifetime of the agent.
+  </Step>
+  <Step title="Waits up to 10 seconds for the connection">
+    A `ready_event` signals when `session.initialize()` completes. If initialization times out the task is left running (the server may be slow) but the manager proceeds without it.
+  </Step>
+  <Step title="Discovers tools">
+    Calls `session.list_tools()` and records `tool_name → server_name` in `server_tools_map`.
+  </Step>
+</Steps>
+
+### Transport type
+
+The current implementation uses **stdio transport** exclusively (`StdioServerParameters` from the MCP SDK). Each server process is launched as a child process; the manager writes to its stdin and reads from its stdout.
+
+<Note>
+  HTTP and SSE transports are not yet wired into `MCPClientManager`. Servers that only expose an HTTP endpoint must be wrapped in a stdio proxy for now.
+</Note>
+
+## Tool schema conversion
+
+`get_tools()` fetches the tool list from every active session and converts each MCP tool into the OpenAI function-calling schema that Logicore agents consume internally:
+
+```python
+logicore_tool = {
+    "type": "function",
+    "function": {
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.inputSchema   # passed through as-is
+    }
+}
+```
+
+The `inputSchema` from the MCP SDK is already JSON Schema, so no transformation is required.
+
+## Tool execution routing
+
+When the model requests a tool call, `MCPAgent._execute_tool()` decides where to run it:
+
+1. **`tool_search_regex`** — handled entirely inside `MCPAgent` (deferred mode discovery).
+2. **Any tool in `_tool_registry`** (deferred mode) — marks the tool as loaded, then delegates.
+3. **All other tools** — delegated to the parent `Agent._execute_tool()`, which checks whether the tool is local or in the `server_tools_map`, and calls `MCPClientManager.execute_tool()` for external tools.
+
+`execute_tool()` on the manager:
+
+```python
+result: CallToolResult = await session.call_tool(tool_name, arguments)
+```
+
+Result content items are normalised to strings:
+
+- `text` items are collected directly.
+- `image` items produce `[Image: <mimeType>]`.
+- `resource` items produce `[Resource: <uri>]`.
+
+If `result.isError` is `True` the return value is `{"success": False, "error": "..."}`. Otherwise `{"success": True, "content": "..."}`.
+
+## Session handling
+
+`MCPAgent` adds lifecycle helpers on top of the base `Agent` session model:
+
+| Method | Description |
+|---|---|
+| `create_session(session_id, system_message, metadata)` | Creates an isolated context; fires `on_session_created` callback. |
+| `destroy_session(session_id)` | Deletes the session; fires `on_session_destroyed` callback. |
+| `list_sessions()` | Returns summaries of all active sessions including message count and timestamps. |
+| `cleanup_stale_sessions()` | Destroys sessions whose `last_activity` exceeds `session_timeout`; returns the number removed. |
+
+These are useful for multi-tenant or long-running assistant backends where unbounded session accumulation is a concern.
+
+## Cleanup
+
+Call `await manager.cleanup()` to shut down all server connections gracefully. It sets every stop event, awaits the background tasks, and clears internal state.
+
+```python
+await manager.cleanup()
+```
+
+<Warning>
+  If you do not call `cleanup()`, background asyncio tasks and child processes will remain alive until the event loop is closed. In short-lived scripts this is typically harmless; in long-running servers you should call `cleanup()` on shutdown.
+</Warning>

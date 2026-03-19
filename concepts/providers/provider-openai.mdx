@@ -1,0 +1,199 @@
+---
+title: "OpenAI Provider"
+description: "Connect Logicore to the OpenAI API for GPT-4o, GPT-4o-mini, and other OpenAI models with full tool-calling and streaming support."
+---
+
+`OpenAIProvider` wraps the official OpenAI Python SDK. It supports non-streaming and streaming chat, tool calling, and multimodal (vision) prompts for compatible models.
+
+## Installation
+
+<Steps>
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install logicore openai
+    ```
+  </Step>
+  <Step title="Set your API key">
+    <Tabs>
+      <Tab title="Environment variable (recommended)">
+        ```bash
+        export OPENAI_API_KEY=sk-...
+        ```
+        On Windows:
+        ```bash
+        set OPENAI_API_KEY=sk-...
+        ```
+      </Tab>
+      <Tab title="Pass directly">
+        ```python
+        from logicore.providers.openai_provider import OpenAIProvider
+
+        provider = OpenAIProvider(
+            model_name="gpt-4o-mini",
+            api_key="sk-..."
+        )
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Constructor parameters
+
+```python
+from logicore.providers.openai_provider import OpenAIProvider
+
+provider = OpenAIProvider(model_name="gpt-4o-mini")
+```
+
+<ParamField path="model_name" type="string" required>
+  The OpenAI model ID to use. Examples: `"gpt-4o"`, `"gpt-4o-mini"`, `"gpt-4-turbo"`, `"o1-mini"`. Must be a model available in your OpenAI project.
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  Your OpenAI secret key. If omitted, the provider reads `OPENAI_API_KEY` from the environment. Raises `ValueError` if neither is set.
+</ParamField>
+
+<ParamField path="**kwargs" type="any">
+  Extra keyword arguments forwarded to the underlying `openai.OpenAI()` client constructor. Use this to set a custom `base_url` (e.g., for OpenAI-compatible endpoints), `timeout`, `max_retries`, or `http_client`.
+</ParamField>
+
+## Basic usage
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.openai_provider import OpenAIProvider
+
+async def main():
+    provider = OpenAIProvider(model_name="gpt-4o-mini")
+
+    agent = Agent(
+        llm=provider,
+        role="Cloud Assistant",
+        system_message="Provide concise and reliable answers."
+    )
+
+    result = await agent.chat("Explain event-driven architecture in simple terms.")
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+## Streaming
+
+Provide an `on_token` callback to receive each token as it arrives. The callback can be synchronous or `async`:
+
+```python
+import asyncio
+from logicore.providers.openai_provider import OpenAIProvider
+
+async def main():
+    provider = OpenAIProvider(model_name="gpt-4o-mini")
+
+    collected = []
+
+    def on_token(token: str):
+        print(token, end="", flush=True)
+        collected.append(token)
+
+    result = await provider.chat_stream(
+        messages=[
+            {"role": "user", "content": "List 5 principles of clean code."}
+        ],
+        on_token=on_token
+    )
+
+    print()  # newline
+    # result is a ChatCompletionMessage with .content and .tool_calls
+    print("Tool calls:", result.tool_calls)
+
+asyncio.run(main())
+```
+
+`chat_stream` assembles the full response from streamed chunks and returns a `ChatCompletionMessage` object once streaming completes. Tool-call chunks are reconstructed correctly.
+
+## Tool calling
+
+```python
+def calculate_tax(amount: float, rate: float) -> str:
+    """Calculate tax amount from value and rate."""
+    return str(amount * rate)
+
+agent = Agent(
+    llm=OpenAIProvider(model_name="gpt-4o-mini"),
+    tools=[calculate_tax]
+)
+
+result = await agent.chat("What is the tax on $200 at 8.5%?")
+print(result["content"])
+```
+
+When tools are provided, the provider sets `tool_choice="auto"` so the model decides when to call a tool.
+
+## Vision / multimodal
+
+Use a vision-capable model (`gpt-4o`, `gpt-4o-mini`) and pass a list of content parts:
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.openai_provider import OpenAIProvider
+
+async def main():
+    agent = Agent(
+        llm=OpenAIProvider(model_name="gpt-4o-mini"),
+        role="Vision Assistant"
+    )
+
+    message = [
+        {"type": "text", "text": "What is shown in this image?"},
+        {"type": "image_url", "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"}
+    ]
+
+    result = await agent.chat(message)
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Supported `image_url` values:
+- Local file path
+- `https://` image URL
+- `data:image/...;base64,...` inline data
+
+## Using OpenAI-compatible endpoints
+
+Pass a custom `base_url` to target any OpenAI-compatible API (e.g., LM Studio, Together AI, Anyscale):
+
+```python
+provider = OpenAIProvider(
+    model_name="mistralai/Mixtral-8x7B-Instruct-v0.1",
+    api_key="your-key",
+    base_url="https://api.together.xyz/v1"
+)
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValueError: OpenAI API key is required">
+    The `api_key` argument was not passed and `OPENAI_API_KEY` is not set in the environment. Set the environment variable or pass `api_key` directly to the constructor.
+  </Accordion>
+
+  <Accordion title="ValueError: OpenAI model returned empty response">
+    The model returned a response with neither text content nor tool calls. This can happen with certain system prompts or with reasoning models in restricted modes. Check your `system_message` and ensure the model you selected is available in your project.
+  </Accordion>
+
+  <Accordion title="AuthenticationError: Incorrect API key">
+    Double-check the key starts with `sk-` and matches a live key in your [OpenAI dashboard](https://platform.openai.com/api-keys). Keys are not shared across organisations.
+  </Accordion>
+
+  <Accordion title="RateLimitError: You exceeded your current quota">
+    You have hit your usage tier's rate or spend limit. Either add credits, request a tier upgrade, or implement retries with exponential back-off using the `max_retries` kwarg on the client.
+  </Accordion>
+
+  <Accordion title="Model not found / 404 on a specific model">
+    Some models (e.g. `gpt-4`) require explicit access in the OpenAI console. Use `gpt-4o-mini` for broad availability or verify the model is enabled for your project.
+  </Accordion>
+</AccordionGroup>

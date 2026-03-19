@@ -1,0 +1,327 @@
+---
+title: "Custom Tools"
+description: "Write, register, and control custom tools in Logicore — from a simple type-annotated function to class-based tools with Pydantic validation."
+---
+
+Logicore gives you four ways to define a custom tool. All four end up in the same internal structures (`internal_tools` for schemas, `custom_tool_executors` for callables) and are equally callable by the LLM.
+
+## Option 1: Register a Python function (fastest)
+
+The simplest approach. Logicore reads the function's name, docstring, type hints, and default values to produce the JSON schema automatically.
+
+```python
+from logicore import Agent
+
+
+def search_tickets(project: str, status: str = "open", limit: int = 20, **kwargs) -> dict:
+    """Search project tickets.
+
+    Args:
+        project (str): Project key like CORE or API.
+        status (str): Ticket status filter (open, closed, all).
+        limit (int): Max rows to return.
+
+    Returns:
+        dict: Structured ticket results for the caller.
+    """
+    rows = [{"id": "CORE-1", "title": "Fix login", "status": status}]
+    return {"project": project, "count": len(rows), "items": rows[:limit]}
+
+
+agent = Agent(llm="ollama")
+agent.register_tool_from_function(search_tickets)
+```
+
+### Auto-generated JSON schema
+
+The call above causes Logicore to produce and store this schema:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "search_tickets",
+    "description": "Search project tickets.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "description": "Project key like CORE or API."
+        },
+        "status": {
+          "type": "string",
+          "description": "Ticket status filter (open, closed, all).",
+          "default": "open"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max rows to return.",
+          "default": 20
+        }
+      },
+      "required": ["project"]
+    }
+  }
+}
+```
+
+Only `project` appears in `required` because the other parameters have defaults. `**kwargs` is not emitted at all.
+
+## Option 2: Pass functions at initialization
+
+When your tool set is fixed at startup, pass a list directly to `Agent`:
+
+```python
+from logicore import Agent
+
+
+def add(a: int, b: int) -> int:
+    """Add two integers."""
+    return a + b
+
+
+def multiply(a: int, b: int) -> int:
+    """Multiply two integers."""
+    return a * b
+
+
+agent = Agent(
+    llm="ollama",
+    tools=[add, multiply]
+)
+```
+
+This is equivalent to calling `register_tool_from_function` for each function after construction.
+
+## Option 3: Schema-first with a custom executor
+
+When you need full control over the schema — exact parameter names, descriptions, or compatibility with a strict external API — supply the schema yourself:
+
+```python
+from logicore import Agent
+
+
+def get_exchange_rate(base: str, quote: str) -> dict:
+    if base == quote:
+        return {"success": True, "rate": 1.0}
+    return {"success": True, "rate": 83.12, "base": base, "quote": quote}
+
+
+schema = {
+    "type": "function",
+    "function": {
+        "name": "get_exchange_rate",
+        "description": "Get FX conversion rate for a currency pair.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "base": {"type": "string", "description": "Base currency code, e.g. USD"},
+                "quote": {"type": "string", "description": "Quote currency code, e.g. INR"}
+            },
+            "required": ["base", "quote"]
+        }
+    }
+}
+
+
+agent = Agent(llm="ollama")
+agent.add_custom_tool(schema, get_exchange_rate)
+```
+
+This also accepts a `run_sql`-style function with guard logic:
+
+```python
+def run_sql(query: str, limit: int = 100):
+    if not query.strip().lower().startswith("select"):
+        return {"success": False, "error": "Only SELECT statements are allowed"}
+    return {"success": True, "rows": [{"id": 1, "name": "Ada"}], "limit": limit}
+
+agent.add_custom_tool(schema, run_sql)
+```
+
+## Option 4: Class-based tool with `BaseTool`
+
+For reusable, testable tool modules, subclass `BaseTool` from `logicore.tools.base`. The schema is derived automatically from the `args_schema` Pydantic model.
+
+```python
+from pydantic import BaseModel, Field
+from logicore import Agent
+from logicore.tools.base import BaseTool, ToolResult
+
+
+class StockPriceParams(BaseModel):
+    symbol: str = Field(..., description="Ticker symbol like MSFT")
+
+
+class StockPriceTool(BaseTool):
+    name = "get_stock_price"
+    description = "Get latest stock price for a ticker symbol"
+    args_schema = StockPriceParams
+
+    def run(self, symbol: str) -> ToolResult:
+        return ToolResult(success=True, content={"symbol": symbol, "price": 432.15})
+
+
+tool = StockPriceTool()
+agent = Agent(llm="ollama")
+agent.add_custom_tool(tool.schema, lambda **kwargs: tool.run(**kwargs))
+```
+
+`ToolResult` is a `dict` subclass with `success`, `content`, and `error` keys:
+
+```python
+class ToolResult(dict):
+    def __init__(self, success: bool, content: Any = None, error: str = None):
+        ...
+```
+
+## Async tools
+
+Async functions are supported. Declare the function with `async def` and use `await` inside:
+
+```python
+import httpx
+from logicore import Agent
+
+
+async def fetch_price(ticker: str, **kwargs) -> dict:
+    """Fetch the latest price for a stock ticker.
+
+    Args:
+        ticker (str): Stock symbol, e.g. AAPL.
+
+    Returns:
+        dict: Price data including open, high, low, close.
+    """
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.example.com/price/{ticker}")
+        return resp.json()
+
+
+agent = Agent(llm="ollama")
+agent.register_tool_from_function(fetch_price)
+```
+
+## Tools that return complex types
+
+Return `dict` or `list` — Logicore serializes them to JSON strings before passing them to the LLM:
+
+```python
+def get_user_profile(user_id: str, **kwargs) -> dict:
+    """Retrieve a user profile by ID.
+
+    Args:
+        user_id (str): The user's unique identifier.
+
+    Returns:
+        dict: User profile with name, email, and role.
+    """
+    return {
+        "id": user_id,
+        "name": "Ada Lovelace",
+        "email": "ada@example.com",
+        "role": "admin"
+    }
+```
+
+The recommended response shape for consistent error handling:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "error": null
+}
+```
+
+## Error handling
+
+When a tool function raises an uncaught exception, Logicore wraps the error and sends it back to the LLM as the tool result. The model sees the error and adjusts its approach.
+
+For recoverable failures, return an error field instead of raising:
+
+```python
+def lookup_order(order_id: str, **kwargs) -> dict:
+    """Look up an order by ID.
+
+    Args:
+        order_id (str): The order identifier.
+
+    Returns:
+        dict: Order details or an error message.
+    """
+    order = db.find(order_id)
+    if not order:
+        # Return a structured error — do not raise
+        return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "data": order}
+```
+
+<Note>
+Returning a structured error lets the LLM explain the failure to the user in natural language. Raising an exception has the same effect but produces a less readable error string.
+</Note>
+
+## Tool approval workflow
+
+Before executing any tool call, Logicore passes through an approval gate. You can control this at three levels.
+
+### Auto-approve everything
+
+For trusted environments such as local development or CI pipelines:
+
+```python
+agent.set_auto_approve_all(True)
+```
+
+### Custom approval callback
+
+The callback receives the session ID, tool name, and the arguments the LLM supplied. Return `True` to allow or `False` to deny:
+
+```python
+async def approve_tool(session_id: str, tool_name: str, args: dict) -> bool:
+    if tool_name == "delete_file":
+        return False  # Never auto-delete
+
+    if tool_name == "write_file":
+        path = args.get("path", "")
+        if "/etc/" in path or "C:\\Windows" in path:
+            return False  # Prevent writes to system paths
+        return True
+
+    return True  # Allow everything else
+
+
+agent.set_callbacks(on_tool_approval=approve_tool)
+```
+
+When a tool call is denied, the LLM receives a denial message and can explain to the user why the action could not be performed.
+
+## Choosing the right pattern
+
+| Scenario | Recommended approach |
+|---|---|
+| Fast prototyping | `register_tool_from_function` |
+| Fixed startup toolset | `tools=[func1, func2]` in `Agent(...)` |
+| Strict API or tool contract | `add_custom_tool(schema, executor)` |
+| Reusable internal toolkit | `BaseTool` subclass |
+
+## Guidelines for high-quality tools
+
+<AccordionGroup>
+  <Accordion title="Strong types">
+    Annotate every parameter. Prefer `dict`, `str`, `list`, and `int` over ambiguous return types. For `BaseTool` subclasses, use a Pydantic `args_schema`.
+  </Accordion>
+  <Accordion title="Stable response shape">
+    Keep the shape of successful responses consistent across calls. The LLM learns to parse your output; changing the structure between invocations degrades reliability.
+  </Accordion>
+  <Accordion title="Descriptions that guide routing">
+    The tool description answers: *when should this tool be used?* Parameter descriptions should include accepted formats and examples. Include `Args` and `Returns` in docstrings.
+  </Accordion>
+  <Accordion title="Hallucination tolerance">
+    Include `**kwargs` to absorb unexpected parameters. Validate critical arguments in code and return friendly errors rather than crashing.
+  </Accordion>
+  <Accordion title="Single-purpose, deterministic behavior">
+    Keep tools focused on one action. Add timeouts and retries for external calls. Avoid hidden side effects unless the tool is explicitly designed to mutate state.
+  </Accordion>
+</AccordionGroup>

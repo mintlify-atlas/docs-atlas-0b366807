@@ -1,0 +1,348 @@
+---
+title: "Tools Overview"
+description: "How Logicore converts Python functions into LLM-callable tools, and how tool execution flows from schema generation through approval to result."
+---
+
+Tools are the bridge between LLM reasoning and executable Python code. When you register a function with an agent, Logicore automatically converts it into a JSON schema the model can call, manages an approval gate, executes the function, and feeds the result back into the conversation.
+
+## Two categories of tools
+
+<CardGroup cols={2}>
+  <Card title="Custom tools" icon="wrench" href="/concepts/tools/tools-custom">
+    Python functions you write and register. Logicore generates the JSON schema automatically from type hints and docstrings.
+  </Card>
+  <Card title="Built-in tools" icon="box" href="/concepts/tools/tools-built-in">
+    A full registry of pre-built tools for files, web, code execution, Git, Office documents, PDFs, media, and scheduling.
+  </Card>
+</CardGroup>
+
+## Automatic schema generation
+
+Logicore parses each registered function and produces a JSON schema the LLM receives alongside the conversation. Nothing is written by hand.
+
+### Input: Python function
+
+```python
+def analyze_sentiment(text: str, language: str = "english", **kwargs) -> str:
+    """
+    Analyzes the sentiment of a text passage.
+
+    Args:
+        text (str): The text to analyze for sentiment.
+        language (str): The language code (english, spanish, french, etc).
+
+    Returns:
+        str: One of 'positive', 'negative', or 'neutral'
+    """
+    return "positive"
+```
+
+### Output: JSON schema sent to the LLM
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "analyze_sentiment",
+    "description": "Analyzes the sentiment of a text passage.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text to analyze for sentiment."
+        },
+        "language": {
+          "type": "string",
+          "description": "The language code (english, spanish, french, etc).",
+          "default": "english"
+        }
+      },
+      "required": ["text"]
+    }
+  }
+}
+```
+
+### What gets extracted
+
+| Source | Maps to |
+|---|---|
+| Function name | `"name"` field |
+| Docstring (first line) | `"description"` field |
+| Type hints (`str`, `int`, `bool`, `List[x]`) | JSON property types |
+| Parameters with defaults | Added to `"default"`, removed from `required` |
+| `**kwargs` | Not emitted in schema — absorbs extra LLM arguments |
+
+## The `**kwargs` hallucination guard
+
+Local and smaller models sometimes call a tool with extra parameters that were not in the schema. Without `**kwargs`, this raises a `TypeError` and the call fails. With it, unexpected arguments are silently absorbed.
+
+```python
+# Safe — extra LLM arguments are absorbed
+def check_weather(location: str, **kwargs) -> str:
+    return f"Weather in {location}: 22°C"
+
+# Unsafe — crashes if LLM adds an unexpected argument
+def check_weather(location: str) -> str:
+    return f"Weather in {location}: 22°C"
+```
+
+<Tip>
+Always include `**kwargs` when writing function-style tools. It has no effect when the model behaves correctly, and prevents crashes when it does not.
+</Tip>
+
+## Tool registration
+
+Tools can be registered at initialization or at runtime.
+
+<Tabs>
+  <Tab title="At initialization">
+    ```python
+    from logicore import Agent
+
+    def multiply(a: int, b: int) -> int:
+        """Multiply two numbers."""
+        return a * b
+
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    agent = Agent(
+        llm="ollama",
+        tools=[multiply, add]
+    )
+    ```
+  </Tab>
+  <Tab title="At runtime">
+    ```python
+    from logicore import Agent
+
+    agent = Agent(llm="ollama")
+    agent.register_tool_from_function(multiply)
+    agent.register_tool_from_function(add)
+    ```
+  </Tab>
+  <Tab title="Schema + executor">
+    ```python
+    from logicore import Agent
+
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "multiply",
+            "description": "Multiply two numbers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"}
+                },
+                "required": ["a", "b"]
+            }
+        }
+    }
+
+    agent = Agent(llm="ollama")
+    agent.add_custom_tool(schema, lambda a, b: a * b)
+    ```
+  </Tab>
+</Tabs>
+
+### Internal storage
+
+Logicore stores both the schema (sent to the LLM) and the executor (the callable) in separate structures:
+
+```python
+# Schema list — sent to the LLM
+agent.internal_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "multiply",
+            "description": "Multiply two numbers.",
+            "parameters": {...}
+        }
+    }
+]
+
+# Executor map — called at runtime
+agent.custom_tool_executors = {
+    "multiply": multiply,
+    "add": add
+}
+```
+
+## Tool execution flow
+
+<Steps>
+  <Step title="Schema generation">
+    When a function is registered, Logicore extracts the name, docstring, type hints, and defaults to produce a JSON schema. This schema is sent to the LLM in every subsequent request.
+  </Step>
+  <Step title="LLM decision">
+    The model reads the user message and the available tool schemas. If a tool is appropriate, it returns a `tool_calls` block in its response rather than prose.
+
+    ```json
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_1",
+          "type": "function",
+          "function": {
+            "name": "multiply",
+            "arguments": {"a": 2, "b": 3}
+          }
+        }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Approval gate">
+    Before executing, Logicore checks approval. By default, built-in tools are grouped into `SAFE_TOOLS`, `APPROVAL_REQUIRED_TOOLS`, and `DANGEROUS_TOOLS`. You can provide a custom callback or bypass the gate entirely.
+
+    ```python
+    async def approve_tool(session_id, tool_name, args):
+        if tool_name == "delete_file":
+            return False  # Never auto-approve deletions
+        return True
+
+    agent.set_callbacks(on_tool_approval=approve_tool)
+    ```
+  </Step>
+  <Step title="Execution">
+    If approved, Logicore looks up the executor, parses the JSON arguments into a Python dict, and calls the function. The return value is stringified and packaged as a `tool` role message.
+
+    ```python
+    # LLM arguments → executor lookup → function call
+    result = agent.custom_tool_executors["multiply"](a=2, b=3)  # → 6
+
+    # Packaged for the LLM
+    {
+      "role": "tool",
+      "content": "6",
+      "tool_call_id": "call_1",
+      "name": "multiply"
+    }
+    ```
+  </Step>
+  <Step title="Result fed back">
+    The tool result is appended to the conversation history and the LLM sees it on the next turn, allowing it to use the result in its final response or make additional tool calls.
+  </Step>
+</Steps>
+
+## Error handling
+
+If the tool function raises an exception, Logicore catches it and sends the error string back to the LLM as the tool result:
+
+```python
+try:
+    result = executor(**args)
+except Exception as e:
+    result = f"ERROR: {str(e)}"
+
+# LLM receives:
+{
+  "role": "tool",
+  "content": "ERROR: division by zero",
+  "tool_call_id": "call_1"
+}
+```
+
+The model sees the error and typically adjusts its approach—either retrying with corrected arguments or explaining the failure to the user.
+
+## Multi-turn tool usage
+
+Tool results persist in the conversation history, so the LLM can reference earlier results in subsequent turns:
+
+```
+Turn 1 — User: "What is 2 × 3?"
+          LLM:  Calls multiply(2, 3) → 6
+
+Turn 2 — User: "Now add 5."
+          LLM:  Calls add(6, 5) → 11  (recalls the previous result)
+
+Turn 3 — User: "Multiply by 2."
+          LLM:  Calls multiply(11, 2) → 22
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Write descriptive docstrings">
+    The docstring becomes the tool description the LLM reads. Include `Args` and `Returns` sections so the model understands exactly when and how to call the tool.
+
+    ```python
+    # Good
+    def analyze_code(code: str, language: str = "python") -> str:
+        """
+        Analyzes source code for bugs and improvements.
+
+        Args:
+            code (str): The source code to analyze.
+            language (str): Programming language (python, javascript, java, etc).
+
+        Returns:
+            str: Analysis report with findings and recommendations.
+        """
+
+    # Bad
+    def analyze_code(code, language="python"):
+        """Analyze code."""
+    ```
+  </Accordion>
+  <Accordion title="Always include **kwargs">
+    Absorbs hallucinated parameters from models that add extra arguments not declared in the schema.
+
+    ```python
+    def search(query: str, num_results: int = 10, **kwargs) -> list:
+        """Search for information."""
+    ```
+  </Accordion>
+  <Accordion title="Return JSON-serializable types">
+    Tool results are serialized to strings before being sent to the LLM. Return `dict`, `list`, `str`, `int`, or `bool` — not custom class instances.
+
+    ```python
+    # Good
+    def get_data() -> dict:
+        return {"status": "ok", "count": 42}
+
+    # Bad — cannot be serialized
+    def get_data() -> MyCustomClass:
+        return MyCustomClass()
+    ```
+  </Accordion>
+  <Accordion title="Use sensible defaults">
+    Parameters with defaults are marked optional in the schema, reducing how often the LLM needs to guess values.
+
+    ```python
+    def search(query: str, num_results: int = 10, language: str = "en") -> list:
+        """Search for information."""
+    ```
+  </Accordion>
+  <Accordion title="Conditional tool loading">
+    Load tools based on context to avoid exposing dangerous capabilities unnecessarily.
+
+    ```python
+    agent = Agent(llm="ollama")
+
+    if user_role == "admin":
+        agent.register_tool_from_function(delete_file)
+        agent.register_tool_from_function(restart_service)
+
+    agent.register_tool_from_function(check_status)  # Always available
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance reference
+
+| Operation | Typical time |
+|---|---|
+| Schema generation (per tool) | under 1ms |
+| Tool selection (LLM decision) | 50–200ms (network-bound) |
+| Execution | Depends on tool, usually under 100ms |
+| Result formatting | under 1ms |
+| **Total per tool call** | ~100–300ms |

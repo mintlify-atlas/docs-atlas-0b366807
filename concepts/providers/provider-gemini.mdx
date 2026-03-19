@@ -1,0 +1,206 @@
+---
+title: "Gemini Provider"
+description: "Use Google Gemini models with Logicore Agent for native multimodal support, long context windows, and function calling."
+---
+
+`GeminiProvider` wraps the `google-genai` SDK to connect Logicore to Google's Gemini family of models. Gemini is natively multimodal — text, images, and function calls are first-class inputs — and supports some of the largest context windows available (up to 2M tokens on Gemini 1.5 Pro).
+
+## Installation
+
+<Steps>
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install logicore google-genai
+    ```
+  </Step>
+  <Step title="Set your API key">
+    <Tabs>
+      <Tab title="GEMINI_API_KEY">
+        ```bash
+        export GEMINI_API_KEY=AIza...
+        ```
+        On Windows:
+        ```bash
+        set GEMINI_API_KEY=AIza...
+        ```
+      </Tab>
+      <Tab title="GOOGLE_API_KEY (alias)">
+        ```bash
+        export GOOGLE_API_KEY=AIza...
+        ```
+        `GeminiProvider` checks `GEMINI_API_KEY` first, then falls back to `GOOGLE_API_KEY`.
+      </Tab>
+      <Tab title="Pass directly">
+        ```python
+        from logicore.providers.gemini_provider import GeminiProvider
+
+        provider = GeminiProvider(
+            model_name="gemini-1.5-flash",
+            api_key="AIza..."
+        )
+        ```
+      </Tab>
+    </Tabs>
+
+    Get a free key at [aistudio.google.com](https://aistudio.google.com/app/apikey).
+  </Step>
+</Steps>
+
+## Constructor parameters
+
+```python
+from logicore.providers.gemini_provider import GeminiProvider
+
+provider = GeminiProvider(model_name="gemini-1.5-flash")
+```
+
+<ParamField path="model_name" type="string" required>
+  The Gemini model ID to use. Examples: `"gemini-1.5-flash"`, `"gemini-1.5-pro"`, `"gemini-2.5-pro"`, `"gemini-2.0-flash"`. Check the [Google AI model catalog](https://ai.google.dev/models/gemini) for the current list.
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  Your Gemini API key. If omitted, the provider reads `GEMINI_API_KEY` then `GOOGLE_API_KEY` from the environment. Raises `ValueError` if neither is found.
+</ParamField>
+
+## Basic usage
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.gemini_provider import GeminiProvider
+
+async def main():
+    provider = GeminiProvider(model_name="gemini-1.5-flash")
+
+    agent = Agent(
+        llm=provider,
+        role="Multimodal Assistant",
+        system_message="Answer accurately and briefly."
+    )
+
+    result = await agent.chat("Explain retrieval augmented generation in 4 lines.")
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+System prompts passed via `system_message` are automatically mapped to Gemini's `system_instruction` field.
+
+## Streaming
+
+`GeminiProvider` runs the Gemini streaming API in a thread executor to keep the asyncio event loop unblocked:
+
+```python
+import asyncio
+from logicore.providers.gemini_provider import GeminiProvider
+
+async def main():
+    provider = GeminiProvider(model_name="gemini-1.5-flash")
+
+    async def on_token(token: str):
+        print(token, end="", flush=True)
+
+    result = await provider.chat_stream(
+        messages=[
+            {"role": "user", "content": "Write a haiku about distributed systems."}
+        ],
+        on_token=on_token
+    )
+
+    print()
+    print("Role:", result["role"])
+
+asyncio.run(main())
+```
+
+`chat_stream` returns a dict with `role`, `content`, and optionally `tool_calls` once all tokens have been received.
+
+## Tool calling
+
+Logicore converts standard tool definitions to Gemini `FunctionDeclaration` objects automatically:
+
+```python
+def fetch_doc_title(url: str) -> str:
+    """Fetch the page title for a URL."""
+    return f"Title for {url}"
+
+agent = Agent(
+    llm=GeminiProvider(model_name="gemini-1.5-flash"),
+    tools=[fetch_doc_title]
+)
+
+result = await agent.chat("What is the title of https://docs.logicore.ai?")
+print(result["content"])
+```
+
+Function call IDs are formatted as `call_<function_name>` and tool results are returned to Gemini as `FunctionResponse` parts in the conversation history.
+
+## Vision / multimodal
+
+All Gemini models support images natively. Pass image parts alongside text:
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.gemini_provider import GeminiProvider
+
+async def main():
+    agent = Agent(
+        llm=GeminiProvider(model_name="gemini-2.5-pro"),
+        role="Vision Assistant"
+    )
+
+    message = [
+        {"type": "text", "text": "Describe this image in one sentence."},
+        {"type": "image_url", "image_url": "/path/to/diagram.png"}
+    ]
+
+    result = await agent.chat(message)
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Supported `image_url` values:
+- Local file path
+- `https://` image URL
+- `data:image/...;base64,...` inline data
+
+<Tip>
+For documents, charts, or screenshots requiring detailed analysis, `gemini-1.5-pro` and `gemini-2.5-pro` deliver the best accuracy. For quick image classification or captioning, `gemini-1.5-flash` is faster and cheaper.
+</Tip>
+
+## How Gemini-specific formatting works
+
+The `GeminiGateway` handles several format differences transparently:
+
+| Concern | How it is handled |
+|---|---|
+| System messages | Extracted and passed as `system_instruction` in `GenerateContentConfig` |
+| Tool definitions | Converted to `FunctionDeclaration` objects in a `Tool` config |
+| Tool results | Returned as `Content(role="tool", parts=[FunctionResponse(...)])` |
+| Assistant role | Mapped to Gemini's `"model"` role in `Content` objects |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValueError: Gemini/Google API key is required">
+    Neither `api_key` nor `GEMINI_API_KEY`/`GOOGLE_API_KEY` is set. Get a free key at [aistudio.google.com](https://aistudio.google.com/app/apikey) and export it.
+  </Accordion>
+
+  <Accordion title="ValueError: Gemini returned an empty response">
+    The model may have triggered a safety filter or the prompt produced no output. Try rephrasing the request or check the [Gemini safety settings](https://ai.google.dev/gemini-api/docs/safety-settings) for your API key.
+  </Accordion>
+
+  <Accordion title="ValueError: Gemini model does not support this image/data type">
+    You are passing an image to a model or API version that does not support vision. Ensure you are using `gemini-1.5-flash`, `gemini-1.5-pro`, `gemini-2.0-flash`, or `gemini-2.5-pro`.
+  </Accordion>
+
+  <Accordion title="Tool calls not working / missing function responses">
+    Gemini requires tool responses to be returned as `FunctionResponse` parts, not plain text. Logicore handles this automatically when tools are registered on `Agent`. If you are calling `provider.chat()` directly, ensure your conversation history follows the Gemini format (role `"tool"` with the correct `name` field).
+  </Accordion>
+
+  <Accordion title="ResourceExhausted: 429 quota exceeded">
+    The free tier has per-minute and per-day limits. Upgrade to a pay-as-you-go plan in the Google Cloud Console or add exponential back-off in your application code.
+  </Accordion>
+</AccordionGroup>

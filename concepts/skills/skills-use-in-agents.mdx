@@ -1,0 +1,232 @@
+---
+title: "Use skills in agents"
+description: "Load built-in and custom skills into any Logicore agent at initialization time or dynamically at runtime."
+---
+
+Skills can be loaded when constructing an agent or added later with `load_skill` / `load_skills`. The agent resolves string names against the package defaults and your workspace skill directories automatically.
+
+## Resolution order
+
+When you pass a skill name as a string, the agent resolves it in this order:
+
+1. Package defaults — `logicore/skills/defaults/`
+2. Workspace skill directories (when `workspace_root` is set) — `.agent/skills/`, `_agent/skills/`, `.agents/skills/`, `_agents/skills/`
+
+## Loading at initialization
+
+Pass skill names in the `skills` list when constructing an `Agent`:
+
+```python
+from logicore.agents.agent import Agent
+
+agent = Agent(
+    llm="ollama",
+    tools=True,
+    workspace_root="/path/to/project",
+    skills=["web_research"]
+)
+```
+
+Built-in skills like `web_research` and `code_review` resolve without a `workspace_root`:
+
+```python
+agent = Agent(
+    llm="ollama",
+    tools=True,
+    skills=["code_review"]
+)
+```
+
+## Loading a skill object directly
+
+Use `SkillLoader.load()` to load a skill from a directory path, then pass the resulting object to `agent.load_skill()`:
+
+```python
+from logicore.skills.loader import SkillLoader
+from logicore.agents.agent import Agent
+
+skill = SkillLoader.load("/path/to/project/.agent/skills/release_assistant")
+
+agent = Agent(llm="ollama", tools=True)
+if skill:
+    agent.load_skill(skill)
+```
+
+<Note>
+  `SkillLoader.load()` returns `None` if the directory does not contain a valid `SKILL.md`. Always check the return value before calling `agent.load_skill()`.
+</Note>
+
+## Loading multiple skills
+
+<Tabs>
+  <Tab title="Constructor">
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(
+        llm="ollama",
+        tools=True,
+        workspace_root="/path/to/project",
+        skills=["web_research", "code_review"]
+    )
+    ```
+  </Tab>
+  <Tab title="load_skills method">
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(llm="ollama", tools=True, workspace_root="/path/to/project")
+    agent.load_skills(["web_research", "code_review"])
+    ```
+  </Tab>
+  <Tab title="Discovered from directory">
+    ```python
+    from logicore.skills.loader import SkillLoader
+    from logicore.agents.agent import Agent
+
+    skills = SkillLoader.discover("/path/to/project/.agent/skills")
+
+    agent = Agent(llm="ollama", tools=True)
+    for skill in skills:
+        agent.load_skill(skill)
+    ```
+  </Tab>
+</Tabs>
+
+## Using skills with different agent types
+
+`BasicAgent`, `SmartAgent`, and `MCPAgent` all share the same underlying skill-loading flow from `Agent`. The `skills` constructor parameter and `load_skill` / `load_skills` methods work identically across all agent types.
+
+<CodeGroup>
+
+```python MCPAgent
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(
+    provider="ollama",
+    mcp_config_path="mcp.json",
+    workspace_root="/path/to/project",
+    skills=["release_assistant"]
+)
+```
+
+```python SmartAgent
+from logicore.agents.agent_smart import SmartAgent
+
+agent = SmartAgent(
+    llm="ollama",
+    workspace_root="/path/to/project",
+    skills=["web_research", "code_review"]
+)
+```
+
+</CodeGroup>
+
+## What happens after loading
+
+When `load_skill()` runs, the agent does the following:
+
+1. **Deduplication** — if a skill with the same name is already loaded, it is skipped.
+2. **Tool registration** — each tool schema from `Skill.tools` is appended to `self.internal_tools`.
+3. **Executor registration** — each callable from `Skill.tool_executors` is stored in `self.skill_tool_executors`.
+4. **Tool support flag** — `supports_tools` is set to `True` if the skill contributes any tools.
+5. **Prompt injection** — `_build_skills_prompt_section()` formats all loaded skill instructions and `_rebuild_system_prompt_with_tools()` appends the block to the system prompt:
+
+```text
+<skills>
+### Skill: web_research
+...
+### Skill: code_review
+...
+</skills>
+```
+
+Once loaded, skill tools participate in the same tool-calling loop as any other registered tool.
+
+## Inspecting loaded skills
+
+Access the list of currently loaded skills from the `skills` attribute on an agent instance:
+
+```python
+for skill in agent.skills:
+    print(skill.name, "-", skill.description)
+    print(f"  Tools: {len(skill.tools)}")
+    print(f"  Dir:   {skill.skill_dir}")
+```
+
+The `Skill` object exposes:
+
+<AccordionGroup>
+  <Accordion title="skill.name">
+    The `name` field from `SKILL.md` frontmatter, also available via `skill.metadata.name`.
+  </Accordion>
+  <Accordion title="skill.description">
+    The `description` field from `SKILL.md` frontmatter, also available via `skill.metadata.description`.
+  </Accordion>
+  <Accordion title="skill.tools">
+    A list of tool schema dicts in OpenAI function-calling format, one per discovered function in `scripts/`.
+  </Accordion>
+  <Accordion title="skill.tool_executors">
+    A `dict` mapping function names to their callables for runtime execution.
+  </Accordion>
+  <Accordion title="skill.instructions">
+    The raw instruction markdown from `SKILL.md` (everything after the frontmatter block).
+  </Accordion>
+  <Accordion title="skill.skill_dir">
+    A `pathlib.Path` pointing to the skill's root directory, or `None` if built from an object directly.
+  </Accordion>
+</AccordionGroup>
+
+## Overriding or extending skill tools
+
+To add tools on top of what a skill provides, register additional tools after loading the skill:
+
+```python
+from logicore.agents.agent import Agent
+
+agent = Agent(
+    llm="ollama",
+    tools=True,
+    skills=["web_research"]
+)
+
+# Add a custom tool on top of the skill's built-in tools
+def fetch_internal_wiki(query: str) -> str:
+    """Search the internal company wiki for a query."""
+    # implementation
+    return "..."
+
+agent.register_tool(
+    name="fetch_internal_wiki",
+    func=fetch_internal_wiki,
+    description="Search the internal company wiki for a query."
+)
+```
+
+<Tip>
+  Keep skills focused on a single domain. Combining a small number of complementary skills (e.g., `web_research` + `code_review`) produces better results than loading many broad skill packages at once.
+</Tip>
+
+## Combining skills effectively
+
+```python
+# Well-rounded research-to-report workflow
+agent = Agent(
+    llm="ollama",
+    tools=True,
+    workspace_root="/path/to/project",
+    skills=[
+        "web_research",      # Gather information
+        "code_review",       # Analyse any code found
+        "release_assistant"  # Custom workspace skill
+    ]
+)
+
+response = await agent.chat(
+    "Research the latest changes in Python 3.13 and review the code in src/"
+)
+```
+
+<Warning>
+  Avoid loading skills with overlapping tool names. If two skills register a function with the same name, the second registration will overwrite the first executor in `skill_tool_executors`.
+</Warning>

@@ -1,0 +1,410 @@
+---
+title: "BasicAgent"
+description: "The simplest Logicore agent — minimal config, fast setup, ideal for prototypes and lightweight chat applications."
+---
+
+`BasicAgent` is a thin, opinionated wrapper around the core `Agent` class. It auto-generates a system prompt from a name and description, converts plain Python functions into tools, and exposes a minimal API surface so you can focus on your application logic rather than framework plumbing.
+
+```python
+from logicore.agents.agent_basic import BasicAgent
+```
+
+---
+
+## When to Use `BasicAgent`
+
+<CardGroup cols={2}>
+  <Card title="Use BasicAgent when..." icon="circle-check">
+    - You want a working agent in under 5 minutes
+    - Your tools are plain Python functions
+    - You don't need custom approval workflows
+    - You're prototyping or learning the framework
+  </Card>
+  <Card title="Upgrade to Agent when..." icon="arrow-up">
+    - You need full control over the system prompt
+    - You need custom approval callbacks per tool
+    - You're building a multi-tenant production service
+    - You need MCP server integration
+  </Card>
+</CardGroup>
+
+---
+
+## Constructor
+
+```python
+BasicAgent(
+    name: str = "Assistant",
+    description: str = "A helpful AI assistant",
+    provider: str = "ollama",
+    model: str = None,
+    api_key: str = None,
+    tools: list = None,
+    system_prompt: str = None,
+    memory_enabled: bool = True,
+    debug: bool = False,
+    telemetry: bool = False,
+    max_iterations: int = 20,
+    skills: list = None,
+    workspace_root: str = None,
+    **kwargs,
+)
+```
+
+<ParamField path="name" type="str" default="Assistant">
+  Human-readable name for the agent. Used in the auto-generated system prompt — the LLM will present itself with this name.
+</ParamField>
+
+<ParamField path="description" type="str" default="A helpful AI assistant">
+  One-sentence description of what this agent does. Injected into the system prompt to define the agent's purpose and scope.
+</ParamField>
+
+<ParamField path="provider" type="str" default="ollama">
+  LLM provider shorthand. Accepted values: `"ollama"`, `"openai"`, `"groq"`, `"gemini"`, `"azure"`. This is the most important parameter — wrong value causes initialization failure.
+</ParamField>
+
+<ParamField path="model" type="str" default="None">
+  Provider-specific model name. Omit to use the provider's default. Always specify in production.
+</ParamField>
+
+<ParamField path="api_key" type="str" default="None">
+  API key. Required for cloud providers (`openai`, `groq`, `gemini`, `azure`). Not needed for `ollama`.
+</ParamField>
+
+<ParamField path="tools" type="list" default="None">
+  List of tools. Accepts Python callables or `BaseTool` instances. Callables are auto-converted to tool schemas using type hints and docstrings. Omit for a plain chat agent with no tools.
+</ParamField>
+
+<ParamField path="system_prompt" type="str" default="None">
+  Custom system prompt. When provided, overrides the auto-generated prompt entirely. Use when you need a specific persona or strict formatting rules.
+</ParamField>
+
+<ParamField path="memory_enabled" type="bool" default="True">
+  Enable session memory. When `True`, the underlying `Agent` is initialized with `memory=True`, enabling persistent fact storage via `AgentrySimpleMem`.
+</ParamField>
+
+<ParamField path="debug" type="bool" default="False">
+  Print verbose execution logs. Use in development only.
+</ParamField>
+
+<ParamField path="max_iterations" type="int" default="20">
+  Maximum tool-call iterations per `chat()` call. Lower than the base `Agent` default (40) to keep BasicAgent responses snappy.
+</ParamField>
+
+<ParamField path="skills" type="list" default="None">
+  Skill names or `Skill` objects to load at startup.
+</ParamField>
+
+<ParamField path="workspace_root" type="str" default="None">
+  Root directory for filesystem-bound tools.
+</ParamField>
+
+---
+
+## `chat()`
+
+```python
+await agent.chat(
+    message: str | list,
+    session_id: str = "default",
+    stream: bool = False,
+    generate_walkthrough: bool = False,
+    **kwargs,
+) -> str
+```
+
+<ParamField path="message" type="str or list" required>
+  User message. Pass `str` for plain text or a list of content blocks for multimodal input.
+</ParamField>
+
+<ParamField path="session_id" type="str" default="default">
+  Conversation thread identifier. Same ID preserves context across turns. Use per-user IDs in multi-user apps.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="False">
+  Enable token streaming. Requires an `on_token` callback registered via `set_callbacks()`.
+</ParamField>
+
+<ParamField path="generate_walkthrough" type="bool" default="False">
+  Append an LLM-generated execution summary to the response.
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Provider-specific overrides forwarded to the underlying `Agent.chat()` (e.g., `temperature`, `max_tokens`).
+</ParamField>
+
+**Returns:** `str` — the final assistant message.
+
+---
+
+## `chat_sync()`
+
+Synchronous wrapper for environments without an active event loop.
+
+```python
+response: str = agent.chat_sync(
+    message: str,
+    session_id: str = "default",
+    generate_walkthrough: bool = False,
+) -> str
+```
+
+```python
+# Use in scripts and notebooks without asyncio.run()
+response = agent.chat_sync("What is the boiling point of water?")
+print(response)
+```
+
+---
+
+## The `@tool` Decorator
+
+The `tool` decorator provides a clean way to mark functions as tools and set their description:
+
+```python
+from logicore.agents.agent_basic import tool, BasicAgent
+
+@tool("Calculate a math expression safely")
+def calculator(expression: str) -> str:
+    import ast
+    return str(ast.literal_eval(expression))
+
+@tool("Convert temperature between Celsius and Fahrenheit")
+def convert_temp(value: float, from_unit: str, to_unit: str) -> str:
+    if from_unit == "C" and to_unit == "F":
+        return f"{value * 9/5 + 32:.1f}°F"
+    elif from_unit == "F" and to_unit == "C":
+        return f"{(value - 32) * 5/9:.1f}°C"
+    return "Unsupported conversion"
+
+agent = BasicAgent(
+    name="MathBot",
+    description="A math and unit conversion assistant.",
+    tools=[calculator, convert_temp],
+    provider="ollama",
+)
+```
+
+<Tip>
+  The string passed to `@tool()` becomes the function's `__doc__`, which is used as the tool description in the schema. Write it as a clear imperative sentence — the LLM reads this to decide when to call the tool.
+</Tip>
+
+---
+
+## `create_agent()` Factory Function
+
+A one-liner shorthand for creating a `BasicAgent`:
+
+```python
+from logicore.agents.agent_basic import create_agent
+
+agent = create_agent(
+    name: str = "Assistant",
+    description: str = "A helpful AI assistant",
+    tools: list = None,
+    provider: str = "ollama",
+    model: str = None,
+    api_key: str = None,
+    **kwargs,
+) -> BasicAgent
+```
+
+```python
+agent = create_agent(
+    name="WeatherBot",
+    description="Answers weather questions for any city.",
+    tools=[get_current_weather, get_forecast],
+    provider="openai",
+    model="gpt-4o-mini",
+    api_key="sk-...",
+)
+response = await agent.chat("What is the weather in Tokyo?")
+```
+
+`create_agent()` is identical to calling `BasicAgent(...)` directly — use whichever reads more naturally in your codebase.
+
+---
+
+## Additional Methods
+
+### `add_tool(tool)` / `add_tools(tools)`
+
+Add tools after construction without recreating the agent:
+
+```python
+def lookup_order(order_id: str) -> dict:
+    """Look up an order by ID."""
+    return {"order_id": order_id, "status": "shipped"}
+
+agent.add_tool(lookup_order)
+agent.add_tools([cancel_order, refund_order])
+```
+
+### `set_callbacks(...)`
+
+Register streaming and lifecycle callbacks:
+
+```python
+agent.set_callbacks(
+    on_token=lambda token: print(token, end="", flush=True),
+    on_tool_start=lambda sid, name, args: print(f"Calling {name}..."),
+    on_tool_end=lambda sid, name, result: print(f"{name} done."),
+    on_final_message=lambda sid, content: save_response(sid, content),
+)
+```
+
+### `clear_history(session_id)`
+
+Erase conversation history for a session:
+
+```python
+agent.clear_history("user-42")
+```
+
+### `get_session(session_id)`
+
+Access the raw session object:
+
+```python
+session = agent.get_session("user-42")
+print(f"{len(session.messages)} messages in session")
+```
+
+### `load_skill()` / `load_skills()`
+
+```python
+agent.load_skills(["web_research"])
+print(agent.loaded_skills)  # ["web_research"]
+```
+
+---
+
+## Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `agent.tools` | `list[str]` | Names of all registered tools |
+| `agent.system_prompt` | `str` | Current system prompt |
+| `agent.loaded_skills` | `list[str]` | Names of all loaded skills |
+| `agent.telemetry` | `dict` | Token / latency summary (requires `telemetry=True`) |
+
+---
+
+## Examples
+
+<Tabs>
+  <Tab title="Minimal Q&A">
+    ```python
+    from logicore.agents.agent_basic import BasicAgent
+    import asyncio
+
+    async def main():
+        agent = BasicAgent(provider="ollama", model="qwen2:7b")
+        response = await agent.chat("What is machine learning?")
+        print(response)
+
+    asyncio.run(main())
+    ```
+
+    This is the minimum viable setup. No tools, no config — just a provider and a question.
+  </Tab>
+  <Tab title="Multi-turn session">
+    ```python
+    from logicore.agents.agent_basic import BasicAgent
+    import asyncio
+
+    async def main():
+        agent = BasicAgent(provider="ollama")
+
+        await agent.chat("My favorite color is blue.", session_id="u1")
+        response = await agent.chat("What is my favorite color?", session_id="u1")
+        print(response)  # "Your favorite color is blue."
+
+    asyncio.run(main())
+    ```
+
+    Use the same `session_id` across turns to preserve context. Use different IDs to isolate users.
+  </Tab>
+  <Tab title="Streaming">
+    ```python
+    from logicore.agents.agent_basic import BasicAgent
+    import asyncio
+
+    def on_token(token: str):
+        print(token, end="", flush=True)
+
+    async def main():
+        agent = BasicAgent(
+            provider="openai",
+            system_prompt="You are a concise coding tutor.",
+        )
+        agent.set_callbacks(on_token=on_token)
+
+        response = await agent.chat("Explain async/await in Python", stream=True)
+        print("\n--- Final ---")
+        print(response)
+
+    asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Agent with tools">
+    ```python
+    from logicore.agents.agent_basic import BasicAgent, tool
+    import asyncio
+
+    @tool("Calculate a math expression")
+    def calculator(expression: str) -> str:
+        import ast
+        return str(ast.literal_eval(expression))
+
+    @tool("Get current weather for a city")
+    def get_weather(city: str) -> str:
+        return f"Weather in {city}: 22°C, partly cloudy."
+
+    async def main():
+        agent = BasicAgent(
+            name="HelperBot",
+            description="Handles math and weather queries.",
+            tools=[calculator, get_weather],
+            provider="ollama",
+        )
+        print(agent.tools)  # ['calculator', 'get_weather']
+
+        response = await agent.chat("What is 128 * 256 and what's the weather in Rome?")
+        print(response)
+
+    asyncio.run(main())
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Tool Schema Inference
+
+`BasicAgent` uses `register_tool_from_function()` (inherited from `Agent`) to build tool schemas from function signatures. Type hints map to JSON Schema types:
+
+| Python type | JSON Schema type |
+|---|---|
+| `str` | `"string"` |
+| `int` | `"integer"` |
+| `float` | `"number"` |
+| `bool` | `"boolean"` |
+| `list` | `"array"` |
+| `dict` | `"object"` |
+
+Parameters without a default value are marked `required`. Parameters with defaults are optional.
+
+```python
+def search_products(
+    query: str,          # required — no default
+    limit: int = 10,     # optional — has default
+    category: str = "",  # optional — has default
+) -> list:
+    """Search the product catalog."""
+    ...
+```
+
+<Warning>
+  Always annotate your tool function parameters with type hints. Without them, all parameters default to `"string"` type in the schema, which may cause incorrect tool calls.
+</Warning>

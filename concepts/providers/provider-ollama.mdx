@@ -1,0 +1,213 @@
+---
+title: "Ollama Provider"
+description: "Run local Ollama models with Logicore Agent for private, air-gapped, and cost-free inference."
+---
+
+`OllamaProvider` connects Logicore to a locally running Ollama daemon. Because all inference happens on your hardware, this provider is ideal for privacy-sensitive workloads, offline environments, and experimentation where cloud API costs are a concern.
+
+## Installation
+
+<Steps>
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install logicore ollama
+    ```
+  </Step>
+  <Step title="Install and start the Ollama daemon">
+    Download Ollama from [ollama.com](https://ollama.com) and verify it is running:
+    ```bash
+    ollama serve
+    ```
+  </Step>
+  <Step title="Pull a model">
+    ```bash
+    ollama pull qwen3.5:0.8b
+    ```
+    Any model listed on the [Ollama model library](https://ollama.com/library) can be used.
+  </Step>
+</Steps>
+
+<Note>
+No API key is required. `OllamaProvider` communicates with the local daemon over HTTP (default: `http://localhost:11434`).
+</Note>
+
+## Constructor parameters
+
+```python
+from logicore.providers.ollama_provider import OllamaProvider
+
+provider = OllamaProvider(model_name="qwen3.5:0.8b")
+```
+
+<ParamField path="model_name" type="string" required>
+  The Ollama model tag to use, e.g. `"qwen3.5:0.8b"`, `"llama3.3:70b"`, `"qwen3-vl:latest"`. Must match a model that has already been pulled locally.
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  Unused for local Ollama. Accepted for interface compatibility with other providers. Defaults to `None`.
+</ParamField>
+
+<ParamField path="**kwargs" type="any">
+  Extra keyword arguments forwarded directly to the underlying `ollama.Client()` constructor. Use this to set a custom `host`, `timeout`, or TLS options when connecting to a remote Ollama instance.
+</ParamField>
+
+## Basic usage
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.ollama_provider import OllamaProvider
+
+async def main():
+    provider = OllamaProvider(model_name="qwen3.5:0.8b")
+
+    agent = Agent(
+        llm=provider,
+        role="Local Assistant",
+        system_message="Be concise and accurate."
+    )
+
+    result = await agent.chat("Summarize why local models are useful.")
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+## Streaming
+
+Pass an `on_token` callback to `chat_stream` to receive tokens as they are generated. The callback can be synchronous or async.
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.ollama_provider import OllamaProvider
+
+async def main():
+    provider = OllamaProvider(model_name="qwen3.5:0.8b")
+    agent = Agent(llm=provider, role="Streaming Assistant")
+
+    tokens = []
+
+    async def on_token(token: str):
+        print(token, end="", flush=True)
+        tokens.append(token)
+
+    result = await provider.chat_stream(
+        messages=[
+            {"role": "user", "content": "Explain gradient descent in plain English."}
+        ],
+        on_token=on_token
+    )
+
+    print()  # newline after streaming
+    print("Final message role:", result["role"])
+
+asyncio.run(main())
+```
+
+<Note>
+`chat_stream` returns the final assembled message dict after streaming completes. The `on_token` callback fires for every incremental token, including thinking tokens emitted by reasoning-capable models.
+</Note>
+
+## Tool calling
+
+Tool calling works the same way as with cloud providers. Pass Python functions directly to `Agent`:
+
+```python
+def get_weather(city: str) -> str:
+    """Get weather information for a city."""
+    return f"Weather in {city}: 27°C, clear"
+
+agent = Agent(
+    llm=OllamaProvider(model_name="qwen3.5:0.8b"),
+    tools=[get_weather]
+)
+
+result = await agent.chat("What's the weather in Tokyo?")
+print(result["content"])
+```
+
+<Warning>
+Tool calling support varies by model. Models like `qwen3`, `llama3.3`, and `mistral` support it well. Smaller or older models may produce unreliable tool calls. Vision models typically cannot use tools in the same turn.
+</Warning>
+
+## Vision / multimodal
+
+Use a vision-capable model tag (`qwen3-vl`, `llava`, `moondream`, etc.) and pass a list with both text and image parts:
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.ollama_provider import OllamaProvider
+
+async def main():
+    agent = Agent(
+        llm=OllamaProvider(model_name="qwen3-vl:latest"),
+        role="Vision Assistant"
+    )
+
+    message = [
+        {"type": "text", "text": "Describe this image in one sentence."},
+        {"type": "image_url", "image_url": "/path/to/image.png"}
+    ]
+
+    result = await agent.chat(message)
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Supported `image_url` values:
+- Local file path (Linux, macOS, Windows)
+- `https://` image URL
+- `data:image/...;base64,...` inline data
+
+`OllamaProvider` automatically detects vision capability by inspecting the model's metadata via `ollama show`. It raises `ValueError` if you send an image to a non-vision model.
+
+## Pulling models programmatically
+
+`OllamaProvider` exposes a `pull_model()` helper that downloads the model if it is not already present:
+
+```python
+provider = OllamaProvider(model_name="phi3:mini")
+
+if provider.pull_model():
+    print("Model pulled successfully")
+else:
+    print("Model already present or pull failed")
+```
+
+This is useful in automated deployment scripts and CI pipelines where you cannot guarantee the model exists on the host.
+
+## Connecting to a remote Ollama instance
+
+```python
+provider = OllamaProvider(
+    model_name="llama3.3:70b",
+    host="http://gpu-server:11434"  # forwarded to ollama.Client()
+)
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValueError: No valid messages to send to Ollama">
+    All messages in the conversation were filtered out (empty content and no tool calls). Ensure at least the final user message has non-empty `content`.
+  </Accordion>
+
+  <Accordion title="ValueError: Ollama model does not support vision capabilities">
+    The model tag you specified is not a vision model. Switch to `qwen3-vl:latest`, `llava:13b`, or another vision-capable tag, then retry.
+  </Accordion>
+
+  <Accordion title="Ollama error: model not found / 404">
+    The model has not been pulled. Run `ollama pull <model>` or call `provider.pull_model()` in your code.
+  </Accordion>
+
+  <Accordion title="Slow inference">
+    Ollama defaults to CPU inference when no GPU is available. Install CUDA or Metal drivers and ensure Ollama picks up the GPU. Run `ollama run <model>` in the terminal and check the logs for `using device`.
+  </Accordion>
+
+  <Accordion title="Empty response / ValueError: Ollama returned empty message">
+    Some smaller models occasionally return empty responses. Try a larger quantization (e.g., `q8_0` instead of `q2_K`) or switch to a model with better instruction-following, such as `qwen3.5:7b`.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,489 @@
+---
+title: "Agent"
+description: "The full-featured, production-ready base agent with tools, approval workflows, streaming, and optional persistent memory."
+---
+
+`Agent` is the core class in the Logicore framework. Every other agent type (`SmartAgent`, `CopilotAgent`, `MCPAgent`) inherits from it. Use `Agent` directly when you want complete control: bring your own Python functions as tools, define approval policies, manage multiple conversation sessions, and stream tokens to your UI.
+
+```python
+from logicore.agents.agent import Agent
+```
+
+---
+
+## Constructor
+
+```python
+Agent(
+    llm: str | LLMProvider = "ollama",
+    model: str = None,
+    api_key: str = None,
+    endpoint: str = None,
+    system_message: str = None,
+    role: str = "general",
+    debug: bool = False,
+    tools: list = [],
+    max_iterations: int = 40,
+    capabilities: Any = None,
+    telemetry: bool = False,
+    memory: bool = False,
+    context_compression: bool = False,
+    skills: list = None,
+    workspace_root: str = None,
+)
+```
+
+<AccordionGroup>
+  <Accordion title="Provider & model parameters">
+    <ParamField path="llm" type="str or LLMProvider" default="ollama">
+      LLM provider. Pass a string shorthand (`"ollama"`, `"openai"`, `"gemini"`, `"groq"`, `"azure"`) or a pre-constructed `LLMProvider` instance. This is the single most important parameter — it determines which backend receives every request.
+    </ParamField>
+
+    <ParamField path="model" type="str" default="None">
+      Provider-specific model name. When omitted, each provider falls back to a default:
+      - `ollama` → `"gpt-oss:20b-cloud"`
+      - `openai` → `"gpt-4"`
+      - `groq` → `"llama-3.3-70b-versatile"`
+      - `gemini` → `"gemini-pro"`
+
+      Always set this explicitly in production to avoid silent model changes.
+    </ParamField>
+
+    <ParamField path="api_key" type="str" default="None">
+      API key for cloud providers (`openai`, `groq`, `gemini`, `azure`). Required for those providers; omit for local providers like Ollama.
+    </ParamField>
+
+    <ParamField path="endpoint" type="str" default="None">
+      Custom endpoint URL. Required for `azure` (Azure OpenAI endpoint). Can override the default base URL for self-hosted models.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Behavior parameters">
+    <ParamField path="system_message" type="str" default="None">
+      Custom system prompt. When omitted, an appropriate prompt is auto-generated from `role`. Use this to define the agent's persona, constraints, and output format.
+    </ParamField>
+
+    <ParamField path="role" type="str" default="general">
+      Role hint used to select a built-in system prompt when `system_message` is not provided. Common values: `"general"`, `"copilot"`. Only used when `system_message` is `None`.
+    </ParamField>
+
+    <ParamField path="max_iterations" type="int" default="40">
+      Maximum number of LLM-tool loop iterations per `chat()` call. Protects against infinite tool loops. Returns `"Max iterations reached."` when the limit is hit.
+    </ParamField>
+
+    <ParamField path="debug" type="bool" default="False">
+      Print verbose logs to stdout — iteration count, tool calls, streaming status, memory events. Use in development only.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Tools & skills parameters">
+    <ParamField path="tools" type="list" default="[]">
+      Initial tool set. Accepts:
+      - A list of Python callables — auto-registered with schema inferred from type hints and docstrings.
+      - A list of raw JSON schema dicts — added as-is.
+      - `True` — loads all built-in Logicore tools (filesystem, web, bash, etc.).
+
+      Functions must use type hints for accurate schema generation.
+    </ParamField>
+
+    <ParamField path="skills" type="list" default="None">
+      Skill names (strings) or `Skill` objects to load at initialization. Skills bundle tool schemas, executors, and system-prompt instructions into a reusable package.
+    </ParamField>
+
+    <ParamField path="workspace_root" type="str" default="None">
+      Filesystem root used by file and bash tools. Constrains tool execution to this directory. Important for security when exposing filesystem tools.
+    </ParamField>
+  </Accordion>
+
+  <Accordion title="Memory & observability parameters">
+    <ParamField path="memory" type="bool" default="False">
+      Enable persistent memory via `AgentrySimpleMem`. When `True`, the agent indexes messages and allows on-demand RAG retrieval via the `memory` tool. Memory is scoped by `role` and `session_id`.
+    </ParamField>
+
+    <ParamField path="context_compression" type="bool" default="False">
+      Summarize older messages when the context window grows long. Reduces token cost on extended conversations. Uses the same provider to generate the summary.
+    </ParamField>
+
+    <ParamField path="telemetry" type="bool" default="False">
+      Track per-session token usage, tool call counts, latency, and provider info. Access via the `agent.telemetry` property.
+    </ParamField>
+
+    <ParamField path="capabilities" type="Any" default="None">
+      Manual override for model capability detection (`supports_tools`, `supports_vision`). When `None`, capabilities are detected automatically on the first `chat()` call. Pass a dict or `ModelCapabilities` object to skip detection.
+    </ParamField>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## `chat()`
+
+The primary entry point. Runs the full agent loop and returns the final assistant message.
+
+```python
+await agent.chat(
+    user_input: str | list,
+    session_id: str = "default",
+    callbacks: dict = None,
+    stream: bool = False,
+    streaming_funct: callable = None,
+    generate_walkthrough: bool = False,
+    **kwargs,
+) -> str
+```
+
+<ParamField path="user_input" type="str | list" required>
+  The user's message. Pass a `str` for text, or a list of content blocks for multimodal input (e.g., text + image URLs).
+</ParamField>
+
+<ParamField path="session_id" type="str" default="default">
+  Identifies the conversation thread. Use a unique value per user or per logical thread to keep histories isolated. The session is created automatically on first use.
+</ParamField>
+
+<ParamField path="callbacks" type="dict" default="None">
+  Per-call callback overrides. Merged with any callbacks set via `set_callbacks()`. Supported keys:
+  - `"on_token"` — called for each streamed token
+  - `"on_tool_start"` — called before each tool execution
+  - `"on_tool_end"` — called after each tool execution
+  - `"on_tool_approval"` — approval gate for tool execution
+  - `"on_final_message"` — called when the final answer is ready
+</ParamField>
+
+<ParamField path="stream" type="bool" default="False">
+  Enable token streaming. Requires `"on_token"` in `callbacks` (or `streaming_funct`) to receive tokens progressively.
+</ParamField>
+
+<ParamField path="streaming_funct" type="callable" default="None">
+  Shorthand for setting `callbacks["on_token"]` and enabling streaming in one argument. Equivalent to passing `stream=True, callbacks={"on_token": fn}`.
+</ParamField>
+
+<ParamField path="generate_walkthrough" type="bool" default="False">
+  Append an LLM-generated execution summary to the response. Useful for debugging, demos, or audit records.
+</ParamField>
+
+<ParamField path="**kwargs" type="Any">
+  Forwarded to the provider (e.g., `temperature=0.2`, `max_tokens=800`).
+</ParamField>
+
+**Returns:** `str` — the final assistant message after all tool iterations complete.
+
+<Note>
+  Intermediate tool calls are invisible to the caller unless surfaced via `callbacks`. The return value is always the final synthesized answer.
+</Note>
+
+---
+
+## Tool Management Methods
+
+### `register_tool_from_function(func)`
+
+Convert any Python callable into a tool and register it. Schema is inferred automatically from type hints and Google-style or Sphinx-style docstrings.
+
+```python
+def check_stock(ticker: str, exchange: str = "NASDAQ") -> dict:
+    """
+    Fetch current stock price.
+
+    Args:
+        ticker: Stock ticker symbol (e.g. AAPL).
+        exchange: Exchange name.
+    """
+    return {"ticker": ticker, "price": 182.50}
+
+agent = Agent(llm="ollama")
+agent.register_tool_from_function(check_stock)
+agent.set_auto_approve_all(True)
+
+response = await agent.chat("What is Apple's current stock price?")
+```
+
+<Tip>
+  The docstring `Args:` block populates each parameter's description in the tool schema. Well-documented functions produce better LLM tool-use decisions.
+</Tip>
+
+### `add_custom_tool(schema, executor)`
+
+Register a tool directly from a raw JSON schema and an executor callable. Use when you need full control over the schema structure.
+
+```python
+schema = {
+    "type": "function",
+    "function": {
+        "name": "send_email",
+        "description": "Send an email to a recipient.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient email address"},
+                "subject": {"type": "string", "description": "Email subject line"},
+                "body": {"type": "string", "description": "Email body text"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+}
+
+async def send_email(to: str, subject: str, body: str):
+    # your implementation
+    return {"status": "sent", "to": to}
+
+agent.add_custom_tool(schema, send_email)
+```
+
+### `load_skill(skill)` / `load_skills(skills)`
+
+Add pre-built skill packages. A `Skill` bundles tool schemas, executors, and system-prompt instructions.
+
+```python
+from logicore.skills import Skill
+
+# Load by name (resolved from defaults directory or workspace)
+agent.load_skills(["web_research", "code_review"])
+
+# Load a Skill object directly
+custom_skill = Skill(
+    name="data_analysis",
+    description="Analyze tabular data.",
+    instructions="Use the provided tools to analyze CSV or JSON data.",
+    tools=[...],
+    tool_executors={...},
+)
+agent.load_skill(custom_skill)
+```
+
+---
+
+## Session Management Methods
+
+### `get_session(session_id)`
+
+Return the `AgentSession` for a given ID, creating it if it does not exist.
+
+```python
+session = agent.get_session("user-42")
+print(f"Messages: {len(session.messages)}")
+print(f"Last active: {session.last_activity}")
+```
+
+### `clear_session(session_id)`
+
+Erase the message history for a session while keeping the system message.
+
+```python
+agent.clear_session("user-42")  # History cleared; session still exists
+```
+
+### Multi-session example
+
+Use `session_id` to handle multiple users from a single agent instance:
+
+```python
+agent = Agent(llm="openai", model="gpt-4o-mini", tools=[lookup_order])
+agent.set_auto_approve_all(True)
+
+# Two independent users, one agent
+response_alice = await agent.chat("Where is order #1234?", session_id="alice")
+response_bob   = await agent.chat("Where is order #5678?", session_id="bob")
+
+# Each session retains its own history
+alice_session = agent.get_session("alice")
+print(alice_session.messages)  # includes alice's turns only
+
+# Clear alice's session when her conversation ends
+agent.clear_session("alice")
+```
+
+---
+
+## Approval Workflow
+
+### `set_auto_approve_all(enabled)`
+
+Bypass all approval checks. Every tool call runs without a callback.
+
+```python
+agent.set_auto_approve_all(True)   # bypass — useful for dev/demo
+agent.set_auto_approve_all(False)  # restore default (require callbacks)
+```
+
+<Warning>
+  `set_auto_approve_all(True)` bypasses your approval callbacks entirely. Never use this in production when tools can mutate data or run shell commands.
+</Warning>
+
+### `set_callbacks(**kwargs)`
+
+Register persistent callbacks that apply to every `chat()` call on this agent instance. Per-call `callbacks` dicts are merged on top of these at runtime.
+
+```python
+agent.set_callbacks(
+    on_tool_start=lambda sid, name, args: print(f"Starting {name}"),
+    on_tool_end=lambda sid, name, result: print(f"Done {name}"),
+    on_final_message=lambda sid, content: save_to_db(sid, content),
+)
+```
+
+**Supported callback keys:**
+
+| Key | Signature | When called |
+|---|---|---|
+| `on_token` | `(token: str) -> None` | Each streaming token |
+| `on_tool_start` | `(session_id, tool_name, args) -> None` | Before tool execution |
+| `on_tool_end` | `(session_id, tool_name, result) -> None` | After tool execution |
+| `on_tool_approval` | `async (session_id, tool_name, args) -> bool \| dict` | Approval gate — return `True`/`False` or a modified `args` dict |
+| `on_final_message` | `(session_id, content) -> None` | When the final answer is ready |
+
+<Note>
+  The `on_tool_approval` callback can return a modified `args` dict instead of a boolean. When a dict is returned, the agent treats it as approval and uses the modified arguments for execution — useful for sanitizing inputs.
+</Note>
+
+---
+
+## Usage Examples
+
+### Basic tool use
+
+```python
+from logicore.agents.agent import Agent
+import asyncio
+
+def get_time() -> str:
+    """Return the current server time in HH:MM:SS format."""
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M:%S")
+
+agent = Agent(llm="ollama", tools=[get_time])
+agent.set_auto_approve_all(True)
+
+response = asyncio.run(agent.chat("What time is it?"))
+print(response)
+```
+
+### Streaming with real-time output
+
+```python
+def on_token(token: str):
+    print(token, end="", flush=True)
+
+agent = Agent(llm="openai", model="gpt-4o-mini")
+
+response = asyncio.run(
+    agent.chat(
+        "Explain Python event loops in detail",
+        stream=True,
+        callbacks={"on_token": on_token},
+    )
+)
+print("\n--- Final ---")
+print(response)
+```
+
+### Approval callback (production pattern)
+
+```python
+async def approve_tool(session_id: str, tool_name: str, args: dict) -> bool:
+    """Block destructive tools; allow everything else."""
+    blocked = {"delete_file", "execute_command", "drop_table"}
+    if tool_name in blocked:
+        print(f"[BLOCKED] {tool_name} called with {args}")
+        return False
+    return True
+
+agent = Agent(
+    llm="ollama",
+    tools=[read_file, write_file, delete_file],
+    memory=True,
+)
+agent.set_callbacks(on_tool_approval=approve_tool)
+
+response = asyncio.run(agent.chat("Clean temp files and write a summary."))
+print(response)
+```
+
+### Multi-session management
+
+```python
+agent = Agent(llm="openai", model="gpt-4o-mini")
+agent.set_auto_approve_all(True)
+
+# Isolated sessions per user
+await agent.chat("My name is Alice.", session_id="alice")
+await agent.chat("My name is Bob.",   session_id="bob")
+
+r_alice = await agent.chat("What is my name?", session_id="alice")  # "Alice"
+r_bob   = await agent.chat("What is my name?", session_id="bob")    # "Bob"
+
+# Inspect session state
+alice = agent.get_session("alice")
+print(f"Alice has {len(alice.messages)} messages")
+
+# Reset alice's conversation
+agent.clear_session("alice")
+```
+
+### Persistent memory across sessions
+
+```python
+agent = Agent(llm="ollama", memory=True)
+
+# Session 1 — store a fact
+await agent.chat(
+    "The production database timeout is 30 seconds.",
+    session_id="onboarding",
+)
+
+# Session 2 — retrieve the fact on demand via the memory tool
+agent2 = Agent(llm="ollama", memory=True)
+response = await agent2.chat(
+    "What is the production database timeout?",
+    session_id="qa-session",
+)
+print(response)  # Agent retrieves the fact via RAG memory tool
+```
+
+<Note>
+  Memory context is **not** injected automatically at the start of every chat (to prevent context pollution). Instead, the agent can call the built-in `memory` tool on demand when it needs past facts.
+</Note>
+
+### Walkthrough / audit output
+
+```python
+response = await agent.chat(
+    "Analyze the sales data and write a report to report.md",
+    generate_walkthrough=True,
+)
+# response includes the final answer + "### Walkthrough Summary" section
+print(response)
+```
+
+---
+
+## Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `agent.system_prompt` | `str` | Currently active system prompt |
+| `agent.telemetry` | `dict` | Token usage, latency, tool call counts (requires `telemetry=True`) |
+
+---
+
+## Execution Summary Methods
+
+```python
+# Get the step-by-step log from the last chat() call
+log: list[str]   = agent.get_execution_summary()
+text: str        = agent.print_execution_summary()
+as_dict: dict    = agent.get_execution_summary_dict()
+as_json: str     = agent.get_execution_summary_json()
+```
+
+---
+
+## Supported Providers
+
+| String shorthand | Provider class | Notes |
+|---|---|---|
+| `"ollama"` | `OllamaProvider` | Local inference; no API key needed |
+| `"openai"` | `OpenAIProvider` | Requires `api_key` |
+| `"groq"` | `GroqProvider` | Requires `api_key`; fast inference |
+| `"gemini"` | `GeminiProvider` | Requires `api_key` |
+| `"azure"` | `AzureProvider` | Requires `api_key` and `endpoint` |

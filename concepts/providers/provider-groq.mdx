@@ -1,0 +1,194 @@
+---
+title: "Groq Provider"
+description: "Use Groq's ultra-fast LPU inference with Logicore Agent for low-latency, cost-efficient workloads."
+---
+
+`GroqProvider` connects Logicore to [Groq Cloud](https://console.groq.com), which runs models on Groq's custom Language Processing Units (LPUs). Groq consistently delivers the lowest time-to-first-token of any cloud provider, making it the best choice for latency-sensitive and high-throughput use cases.
+
+## Installation
+
+<Steps>
+  <Step title="Install Python dependencies">
+    ```bash
+    pip install logicore groq
+    ```
+  </Step>
+  <Step title="Set your API key">
+    <Tabs>
+      <Tab title="Environment variable (recommended)">
+        ```bash
+        export GROQ_API_KEY=gsk_...
+        ```
+        On Windows:
+        ```bash
+        set GROQ_API_KEY=gsk_...
+        ```
+      </Tab>
+      <Tab title="Pass directly">
+        ```python
+        from logicore.providers.groq_provider import GroqProvider
+
+        provider = GroqProvider(
+            model_name="llama-3.3-70b-versatile",
+            api_key="gsk_..."
+        )
+        ```
+      </Tab>
+    </Tabs>
+
+    Get a free key at [console.groq.com](https://console.groq.com).
+  </Step>
+</Steps>
+
+## Constructor parameters
+
+```python
+from logicore.providers.groq_provider import GroqProvider
+
+provider = GroqProvider(model_name="llama-3.3-70b-versatile")
+```
+
+<ParamField path="model_name" type="string" required>
+  The Groq model ID. Examples: `"llama-3.3-70b-versatile"`, `"llama-3.1-8b-instant"`, `"mixtral-8x7b-32768"`, `"meta-llama/llama-4-scout-17b-16e-instruct"` (vision). See the full list at [console.groq.com/docs/models](https://console.groq.com/docs/models).
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  Your Groq API key. If omitted, the provider reads `GROQ_API_KEY` from the environment. Raises `ValueError` if neither is set.
+</ParamField>
+
+## Basic usage
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.groq_provider import GroqProvider
+
+async def main():
+    provider = GroqProvider(model_name="llama-3.3-70b-versatile")
+
+    agent = Agent(
+        llm=provider,
+        role="Fast Assistant",
+        system_message="Return clear, fast responses."
+    )
+
+    result = await agent.chat("Give 3 tips to speed up API response times.")
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+## Streaming
+
+`GroqProvider` streams using Groq's sync streaming iterator, wrapped for async compatibility:
+
+```python
+import asyncio
+from logicore.providers.groq_provider import GroqProvider
+
+async def main():
+    provider = GroqProvider(model_name="llama-3.3-70b-versatile")
+
+    def on_token(token: str):
+        print(token, end="", flush=True)
+
+    result = await provider.chat_stream(
+        messages=[
+            {"role": "user", "content": "Explain CAP theorem in two paragraphs."}
+        ],
+        on_token=on_token
+    )
+
+    print()
+    print("Tool calls:", result.tool_calls)
+
+asyncio.run(main())
+```
+
+`chat_stream` reconstructs tool-call chunks from the stream and returns a `ChatCompletionMessage` object when streaming is complete.
+
+## Tool calling
+
+```python
+def lookup_stock(symbol: str) -> str:
+    """Return latest mocked stock price."""
+    return f"{symbol}: 120.5 USD"
+
+agent = Agent(
+    llm=GroqProvider(model_name="llama-3.3-70b-versatile"),
+    tools=[lookup_stock]
+)
+
+result = await agent.chat("What is the current price of NVDA?")
+print(result["content"])
+```
+
+Groq uses the same OpenAI-compatible tool-calling format. When tools are present, `tool_choice="auto"` is set automatically.
+
+## Vision / multimodal
+
+Select a Groq vision model (currently `meta-llama/llama-4-scout-17b-16e-instruct`) and pass image parts:
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.groq_provider import GroqProvider
+
+async def main():
+    agent = Agent(
+        llm=GroqProvider(model_name="meta-llama/llama-4-scout-17b-16e-instruct"),
+        role="Vision Assistant"
+    )
+
+    message = [
+        {"type": "text", "text": "What do you see in this image?"},
+        {"type": "image_url", "image_url": "/path/to/screenshot.png"}
+    ]
+
+    result = await agent.chat(message)
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Supported `image_url` values:
+- Local file path — automatically converted to a `data:image/...;base64,...` URL
+- `https://` image URL
+- `data:image/...;base64,...` inline data
+
+<Note>
+`GroqProvider` detects local image paths and base64-encodes them before sending to the API. No extra handling is needed on your side.
+</Note>
+
+## Why Groq is fast
+
+Groq's LPU (Language Processing Unit) architecture is purpose-built for sequential token generation. Unlike GPU-based providers, LPUs avoid memory-bandwidth bottlenecks, enabling sustained throughput of hundreds of tokens per second with sub-50ms time-to-first-token.
+
+This makes `GroqProvider` the recommended choice when:
+- User-facing latency is critical (chatbots, copilots)
+- You need high throughput at low cost
+- You want a cloud provider as a fast fallback to a local Ollama setup
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValueError: Groq API key is required">
+    The `api_key` argument was not passed and `GROQ_API_KEY` is not set. Obtain a key at [console.groq.com](https://console.groq.com) and export it.
+  </Accordion>
+
+  <Accordion title="ValueError: Groq model returned empty response">
+    The model returned a response with neither content nor tool calls. This occasionally happens with certain instruction patterns. Try rephrasing or switching to `llama-3.3-70b-versatile`, which has the best instruction-following of Groq's available models.
+  </Accordion>
+
+  <Accordion title="ValueError: Groq model does not support vision capabilities">
+    You passed an image to a text-only model. Switch to `meta-llama/llama-4-scout-17b-16e-instruct` for vision tasks.
+  </Accordion>
+
+  <Accordion title="RateLimitError: 429 Too Many Requests">
+    Groq's free tier enforces per-minute token limits. Add exponential back-off or upgrade to a paid plan. You can also set up a fallback to `OpenAIProvider` for burst traffic.
+  </Accordion>
+
+  <Accordion title="Model not found or invalid model name">
+    Groq changes available models periodically. Check the current list at [console.groq.com/docs/models](https://console.groq.com/docs/models) and update `model_name` accordingly.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,69 @@
+---
+title: "MCP Overview"
+description: "Understand what the Model Context Protocol is, why Logicore supports it, and when to use it over standard local tools."
+---
+
+MCP (Model Context Protocol) is a standard protocol that lets your agent connect to external tool servers and invoke those tools during a chat loop — using the same execution surface as local Python functions.
+
+Logicore supports MCP through `MCPAgent` and `MCPClientManager`. Together they handle server connections, tool discovery, schema conversion, and call routing, so your application code stays focused on the chat interface.
+
+## When to use MCP
+
+For small projects with a handful of Python functions, `Agent` or `SmartAgent` is sufficient. Reach for MCP when you need:
+
+- **Shared tool servers** consumed by multiple teams or services
+- **Enterprise governance** — centralized control over which tools are exposed and to whom
+- **Large tool ecosystems** that would exceed prompt or context budgets if loaded all at once
+- **Standard protocol interoperability** with non-Python tooling or third-party MCP servers
+
+## Core components
+
+<CardGroup cols={2}>
+  <Card title="MCPAgent" icon="robot" href="/concepts/mcp/mcp-agent">
+    The agent layer. Extends `Agent` with MCP server integration, session lifecycle utilities, and optional deferred tool loading.
+  </Card>
+  <Card title="MCPClientManager" icon="plug" href="/concepts/mcp/mcp-how-it-works">
+    Manages stdio connections to every server in `mcp.json`, discovers their tools, and routes calls to the right server.
+  </Card>
+  <Card title="Dynamic tool loading" icon="wand-sparkles" href="/concepts/mcp/mcp-dynamic-tools">
+    When the total tool count exceeds a configurable threshold, `MCPAgent` switches to deferred mode and exposes tools on demand.
+  </Card>
+  <Card title="Examples" icon="code" href="/concepts/mcp/mcp-examples">
+    Complete working examples covering small and large toolsets, session management, and lazy initialization.
+  </Card>
+</CardGroup>
+
+## Lifecycle summary
+
+<Steps>
+  <Step title="Create MCPAgent">
+    Instantiate `MCPAgent` with your provider, model, and an optional `mcp_config_path` or `mcp_config` dict.
+  </Step>
+  <Step title="Initialize MCP servers">
+    Call `await agent.init_mcp_servers()`, or skip it — the first `chat()` call triggers lazy initialization automatically.
+  </Step>
+  <Step title="Tools are merged">
+    Internal default tools and all discovered MCP tools are merged into a unified tool list. If the total exceeds `tool_threshold` (default `15`), deferred mode activates automatically.
+  </Step>
+  <Step title="Run the chat loop">
+    Call `await agent.chat(user_input)`. The agent executes tool calls, routing local tools to the built-in executor and MCP tools to the correct server session.
+  </Step>
+  <Step title="Get the response">
+    `chat()` returns the final assistant message as a `str`, or `None` if no final response was produced.
+  </Step>
+</Steps>
+
+## What MCP adds beyond normal tools
+
+| Capability | `Agent` / `SmartAgent` | `MCPAgent` |
+|---|---|---|
+| Local Python tool execution | Yes | Yes (inherited) |
+| External tool server connections | No | Yes |
+| Tool discovery via `mcp.json` | No | Yes |
+| Session lifecycle management | Basic | Full (create, destroy, cleanup) |
+| Deferred / dynamic tool loading | No | Yes |
+| Session metadata and callbacks | No | Yes |
+
+<Tip>
+  If you only have local tools and no external servers, start with `Agent`. Migrate to `MCPAgent` when you need any of the capabilities in the table above — the `chat()` API is identical, so the migration is straightforward.
+</Tip>

@@ -1,0 +1,253 @@
+---
+title: "Agents Overview"
+description: "Compare all Logicore agent types and choose the right one for your use case."
+---
+
+## What Is an Agent?
+
+An **Agent** is an autonomous AI worker that understands natural language tasks, decides which tools to use, maintains context across multi-turn conversations, and executes actions safely with configurable approval workflows.
+
+All agents share a common loop:
+
+<Steps>
+  <Step title="Receive">
+    Accept user input — plain text or multimodal (text + images).
+  </Step>
+  <Step title="Reason">
+    Query the LLM with the assembled context: session history, system prompt, and tool schemas.
+  </Step>
+  <Step title="Decide">
+    The LLM either responds directly or requests one or more tool calls.
+  </Step>
+  <Step title="Approve & Execute">
+    Approval callbacks gate execution. Approved tools run; results are appended to history.
+  </Step>
+  <Step title="Synthesize">
+    The LLM continues with the tool result in context until it produces a final answer.
+  </Step>
+  <Step title="Return">
+    `chat()` returns the final assistant message as a `str`.
+  </Step>
+</Steps>
+
+---
+
+## Agent Types at a Glance
+
+| Feature | `BasicAgent` | `Agent` | `SmartAgent` | `CopilotAgent` | `MCPAgent` |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Multi-turn chat | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Custom tools | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Auto-schema from functions | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Built-in tools (web, bash, notes…) | | | ✓ | ✓ | ✓ |
+| Web search | | | ✓ | ✓ | ✓ |
+| Bash execution | | | ✓ | ✓ | ✓ |
+| Cron scheduling | | ✓ | ✓ | ✓ | ✓ |
+| Persistent memory | | ✓ | ✓ | ✓ | ✓ |
+| Approval workflows | | ✓ | ✓ | ✓ | ✓ |
+| Streaming | | ✓ | ✓ | ✓ | ✓ |
+| Skills | | ✓ | ✓ | ✓ | ✓ |
+| Project mode | | | ✓ | | |
+| Coding convenience methods | | | | ✓ | |
+| MCP servers | | | | | ✓ |
+| RBAC & audit trails | | | | | ✓ |
+
+---
+
+## When to Use Each Agent
+
+<CardGroup cols={2}>
+  <Card title="BasicAgent" icon="bolt" href="./basic-agent">
+    **Best for:** Learning, prototypes, simple Q&A bots.
+
+    Minimum viable configuration — just pick a provider and call `chat()`. No tools, no approval callbacks, no memory required.
+
+    **Setup time: ~2 minutes**
+  </Card>
+  <Card title="Agent" icon="gear" href="./agent">
+    **Best for:** Production applications with custom tools.
+
+    Full-featured base class. Bring your own Python functions as tools, wire up approval callbacks, enable persistent memory, and stream tokens to the UI.
+
+    **Setup time: ~5 minutes**
+  </Card>
+  <Card title="SmartAgent" icon="brain" href="./smart-agent">
+    **Best for:** Developer assistants, project-scoped work, iterative tasks.
+
+    Ships with web search, bash, notes, datetime, cron, and memory tools out of the box. Supports `solo` and `project` modes with automatic learning capture.
+
+    **Setup time: ~5 minutes**
+  </Card>
+  <Card title="MCPAgent" icon="building" href="../mcp/mcp-agent">
+    **Best for:** Enterprise teams with many tools and governance requirements.
+
+    Connects to MCP servers, enforces RBAC approval policies, and writes audit trails. Nothing is left out.
+
+    **Setup time: ~10 minutes**
+  </Card>
+</CardGroup>
+
+---
+
+## Quick Code Examples
+
+<CodeGroup>
+
+```python BasicAgent
+from logicore.agents.agent_basic import BasicAgent
+import asyncio
+
+agent = BasicAgent(provider="ollama", model="qwen2:7b")
+response = asyncio.run(agent.chat("What is machine learning?"))
+print(response)
+```
+
+```python Agent
+from logicore.agents.agent import Agent
+import asyncio
+
+def get_time() -> str:
+    """Return current server time."""
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M:%S")
+
+agent = Agent(llm="ollama", tools=[get_time])
+agent.set_auto_approve_all(True)
+response = asyncio.run(agent.chat("What time is it?"))
+print(response)
+```
+
+```python SmartAgent
+from logicore.agents.agent_smart import SmartAgent
+import asyncio
+
+# Solo mode — broad exploration
+agent = SmartAgent(llm="ollama", mode="solo")
+response = asyncio.run(agent.chat("Find the latest Python async best practices"))
+print(response)
+
+# Project mode — constrained to a specific codebase
+agent = SmartAgent(llm="ollama", mode="project")
+agent.create_project(
+    project_id="api-core",
+    title="API Core",
+    goal="Build stable authentication APIs",
+)
+agent.switch_to_project("api-core")
+response = asyncio.run(agent.chat("Suggest an auth flow and test plan"))
+print(response)
+```
+
+```python MCPAgent
+from logicore.agents.agent_mcp import MCPAgent
+import asyncio
+
+async def rbac_approval(session_id, tool_name, args):
+    sensitive = {"delete_records", "drop_table"}
+    return tool_name not in sensitive
+
+agent = MCPAgent(
+    llm="azure",
+    mcp_servers=["database", "file_system", "http_client"],
+)
+agent.set_callbacks(on_tool_approval=rbac_approval)
+response = asyncio.run(agent.chat("Summarize recent orders and save to report.txt"))
+print(response)
+```
+
+</CodeGroup>
+
+---
+
+## Execution Pipeline
+
+When you call `agent.chat()`, here is what happens internally:
+
+```
+User Query
+    │
+    ▼
+Context Assembly        ← session history + persistent memory + system prompt + tool schemas
+    │
+    ▼
+LLM Inference           ← provider-normalized request (OpenAI / Ollama / Gemini / Azure / Groq)
+    │
+    ▼
+Tool Decision?
+  ├─ No  ──► Final Answer  ──► return str
+  └─ Yes ──► Tool Approval Callback
+                ├─ Denied ──► denial message appended to history, loop continues
+                └─ Approved ──► Execute Tool ──► result appended ──► loop back to LLM
+```
+
+The loop runs up to `max_iterations` times (default `40`) before returning `"Max iterations reached."`.
+
+---
+
+## Approval & Safety Model
+
+By default, every tool that is not on the built-in safe list requires explicit approval. You have two options:
+
+```python
+# Option A: auto-approve everything (dev/demo only)
+agent.set_auto_approve_all(True)
+
+# Option B: selective approval callback (recommended for production)
+async def my_approval(session_id: str, tool_name: str, args: dict) -> bool:
+    if tool_name in {"delete_file", "execute_command"}:
+        return False
+    return True
+
+agent.set_callbacks(on_tool_approval=my_approval)
+```
+
+<Warning>
+  Never use `set_auto_approve_all(True)` in production. Always gate destructive tools behind an approval callback.
+</Warning>
+
+---
+
+## Streaming
+
+All agent types that support streaming accept an `on_token` callback or a `streaming_funct` shorthand:
+
+```python
+def print_token(token: str):
+    print(token, end="", flush=True)
+
+response = await agent.chat(
+    "Explain Python's GIL in detail",
+    stream=True,
+    callbacks={"on_token": print_token},
+)
+```
+
+---
+
+## Memory
+
+Agents support two memory layers:
+
+| Layer | Scope | How to enable |
+|---|---|---|
+| **Session memory** | Current conversation | Automatic — history is kept per `session_id` |
+| **Persistent memory** | Across sessions | Pass `memory=True` to the constructor |
+
+```python
+# Persistent memory example
+agent = Agent(llm="ollama", memory=True)
+await agent.chat("The deployment timeout is 30 seconds.")
+
+# Later session — agent retrieves the fact via RAG memory tool
+agent2 = Agent(llm="ollama", memory=True)
+await agent2.chat("What is the deployment timeout?")
+```
+
+---
+
+## Next Steps
+
+- [BasicAgent](./basic-agent) — minimal setup, `@tool` decorator, factory function
+- [Agent](./agent) — constructor params, all methods, multi-session patterns
+- [SmartAgent](./smart-agent) — modes, built-in tools, project workflows
+- [MCPAgent](../mcp/mcp-agent) — MCP servers, RBAC, audit trails

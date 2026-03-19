@@ -1,0 +1,311 @@
+---
+title: "Azure Provider"
+description: "Connect Logicore to Azure OpenAI, Azure AI Foundry (Anthropic), and Azure AI Inference endpoints from a single provider class."
+---
+
+`AzureProvider` is a unified wrapper for three distinct Azure AI deployment types:
+
+- **Azure OpenAI** — GPT-4o and other OpenAI models deployed in your Azure subscription
+- **Azure AI Foundry (Anthropic)** — Claude models via Azure AI Foundry's managed service
+- **Azure AI Inference (MaaS)** — Llama, Mistral, Phi, and other models via Azure's model-as-a-service API
+
+All three backends share the same `AzureProvider` interface. Logicore detects the deployment type automatically from the endpoint URL and model name, or you can set it explicitly.
+
+## Installation
+
+<Steps>
+  <Step title="Install Python dependencies">
+    <Tabs>
+      <Tab title="Azure OpenAI (GPT models)">
+        ```bash
+        pip install logicore openai
+        ```
+      </Tab>
+      <Tab title="Azure AI Foundry (Claude models)">
+        ```bash
+        pip install logicore openai anthropic
+        ```
+      </Tab>
+      <Tab title="Azure AI Inference (MaaS)">
+        ```bash
+        pip install logicore openai
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Set environment variables">
+    ```bash
+    export AZURE_API_KEY=your_key_here
+    export AZURE_ENDPOINT=https://your-resource.openai.azure.com
+    ```
+    On Windows:
+    ```bash
+    set AZURE_API_KEY=your_key_here
+    set AZURE_ENDPOINT=https://your-resource.openai.azure.com
+    ```
+    The provider also accepts `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT` as fallback variable names.
+  </Step>
+</Steps>
+
+## Constructor parameters
+
+```python
+from logicore.providers.azure_provider import AzureProvider
+
+provider = AzureProvider(
+    model_name="gpt-4o-mini",
+    endpoint="https://your-resource.openai.azure.com",
+    api_key="...",
+    model_type="openai"
+)
+```
+
+<ParamField path="model_name" type="string" required>
+  The **Azure deployment name** — the name you chose when you deployed the model, not necessarily the raw model ID. For example, a deployment of `gpt-4o` might be named `"my-gpt4o-deployment"`. This value is passed as `model` in every API call.
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  Your Azure API key. If omitted, the provider reads `AZURE_API_KEY` then `AZURE_OPENAI_API_KEY` from the environment. Raises `ValueError` if neither is set.
+</ParamField>
+
+<ParamField path="endpoint" type="string">
+  Your Azure resource endpoint URL, e.g. `"https://your-resource.openai.azure.com"`. If omitted, the provider reads `AZURE_ENDPOINT` then `AZURE_OPENAI_ENDPOINT`. Raises `ValueError` if not found.
+</ParamField>
+
+<ParamField path="api_version" type="string">
+  The Azure API version string. If omitted, a sensible default is applied per deployment type:
+  - OpenAI: `"2024-10-21"`
+  - Anthropic: `"2023-06-01"`
+  - Inference (MaaS): `"2024-05-01-preview"`
+</ParamField>
+
+<ParamField path="model_type" type="string">
+  Explicit deployment type: `"openai"`, `"anthropic"`, or `"inference"`. When omitted, the provider auto-detects based on the endpoint URL and deployment name using these heuristics:
+  - Endpoint contains `openai.azure.com` or name contains `gpt` → `"openai"`
+  - Endpoint or name contains `anthropic` or `claude` → `"anthropic"`
+  - Endpoint ends in `/v1` (non-Azure-OpenAI) or contains `inference` → `"inference"`
+  - Default fallback → `"openai"`
+</ParamField>
+
+<ParamField path="**kwargs" type="any">
+  Extra keyword arguments stored internally. Not currently forwarded to the SDK client.
+</ParamField>
+
+## Basic usage
+
+<Tabs>
+  <Tab title="Azure OpenAI">
+    ```python
+    import asyncio
+    from logicore.agents.agent import Agent
+    from logicore.providers.azure_provider import AzureProvider
+
+    async def main():
+        provider = AzureProvider(
+            model_name="gpt-4o-mini",
+            endpoint="https://your-resource.openai.azure.com",
+            api_key="your_key_here",
+            model_type="openai"
+        )
+
+        agent = Agent(
+            llm=provider,
+            role="Enterprise Assistant",
+            system_message="Respond with concise, production-safe guidance."
+        )
+
+        result = await agent.chat("List 5 Azure governance best practices.")
+        print(result["content"])
+
+    asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Azure AI Foundry (Anthropic)">
+    ```python
+    import asyncio
+    from logicore.agents.agent import Agent
+    from logicore.providers.azure_provider import AzureProvider
+
+    async def main():
+        provider = AzureProvider(
+            model_name="claude-3-5-sonnet",
+            endpoint="https://your-foundry-resource.services.ai.azure.com",
+            api_key="your_key_here",
+            model_type="anthropic"
+        )
+
+        agent = Agent(
+            llm=provider,
+            role="Reasoning Assistant",
+            system_message="Think step by step."
+        )
+
+        result = await agent.chat("Summarise the trade-offs of microservices vs monoliths.")
+        print(result["content"])
+
+    asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Azure AI Inference (MaaS)">
+    ```python
+    import asyncio
+    from logicore.agents.agent import Agent
+    from logicore.providers.azure_provider import AzureProvider
+
+    async def main():
+        provider = AzureProvider(
+            model_name="Meta-Llama-3.1-70B-Instruct",
+            endpoint="https://your-maas-endpoint.inference.ai.azure.com/v1",
+            api_key="your_key_here",
+            model_type="inference"
+        )
+
+        agent = Agent(
+            llm=provider,
+            role="Open Model Assistant"
+        )
+
+        result = await agent.chat("Explain the transformer architecture.")
+        print(result["content"])
+
+    asyncio.run(main())
+    ```
+  </Tab>
+</Tabs>
+
+## Streaming
+
+`AzureProvider` supports streaming for all deployment types. The Anthropic backend uses a thread-based queue to bridge the synchronous Anthropic stream API with asyncio:
+
+```python
+import asyncio
+from logicore.providers.azure_provider import AzureProvider
+
+async def main():
+    provider = AzureProvider(
+        model_name="gpt-4o-mini",
+        endpoint="https://your-resource.openai.azure.com",
+        model_type="openai"
+    )
+
+    def on_token(token: str):
+        print(token, end="", flush=True)
+
+    result = await provider.chat_stream(
+        messages=[
+            {"role": "user", "content": "What is zero-trust networking?"}
+        ],
+        on_token=on_token
+    )
+
+    print()
+    print("Tool calls:", result.tool_calls)
+
+asyncio.run(main())
+```
+
+## Tool calling
+
+```python
+def check_compliance(resource_name: str, policy: str) -> str:
+    """Check whether an Azure resource complies with a named policy."""
+    return f"{resource_name} complies with {policy}: True"
+
+agent = Agent(
+    llm=AzureProvider(
+        model_name="gpt-4o-mini",
+        endpoint="https://your-resource.openai.azure.com",
+        model_type="openai"
+    ),
+    tools=[check_compliance]
+)
+
+result = await agent.chat("Does storage-account-prod comply with ISO-27001?")
+print(result["content"])
+```
+
+<Note>
+Tool calling is fully supported for `model_type="openai"` and `model_type="inference"` deployments. For `model_type="anthropic"`, the Anthropic tool-use format is used automatically, but the current implementation returns the text response only (tool results from Anthropic calls are extracted from `content` text blocks).
+</Note>
+
+## Vision / multimodal
+
+Vision is available on Azure OpenAI deployments that use GPT-4o family models:
+
+```python
+import asyncio
+from logicore.agents.agent import Agent
+from logicore.providers.azure_provider import AzureProvider
+
+async def main():
+    agent = Agent(
+        llm=AzureProvider(
+            model_name="gpt-4o-mini",
+            endpoint="https://your-resource.openai.azure.com",
+            model_type="openai"
+        )
+    )
+
+    message = [
+        {"type": "text", "text": "Extract key details from this architecture diagram."},
+        {"type": "image_url", "image_url": "/path/to/diagram.png"}
+    ]
+
+    result = await agent.chat(message)
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Supported `image_url` values:
+- Local file path
+- `https://` image URL
+- `data:image/...;base64,...` inline data
+
+Vision support for Anthropic deployments requires Claude 3+ models. MaaS inference vision support depends on the specific model deployed.
+
+## Model type auto-detection
+
+If `model_type` is omitted, `AzureProvider` applies the following heuristics in order:
+
+```
+1. Endpoint ends in /v1 AND is not openai.azure.com  →  "inference"
+2. "anthropic" in endpoint OR "claude" in model_name  →  "anthropic"
+3. "openai.azure.com" in endpoint OR "gpt" in model_name  →  "openai"
+4. "/models" or "inference" in endpoint  →  "inference"
+5. Default  →  "openai"
+```
+
+Set `model_type` explicitly to avoid ambiguity, especially for Foundry endpoints that may match multiple patterns.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="ValueError: Azure API key is required">
+    Neither `api_key`, `AZURE_API_KEY`, nor `AZURE_OPENAI_API_KEY` is set. Retrieve the key from your Azure resource under **Keys and Endpoint** in the Azure Portal.
+  </Accordion>
+
+  <Accordion title="ValueError: Azure Endpoint is required">
+    Neither `endpoint`, `AZURE_ENDPOINT`, nor `AZURE_OPENAI_ENDPOINT` is set. Copy the endpoint URL from your resource overview page in the Azure Portal.
+  </Accordion>
+
+  <Accordion title="404 DeploymentNotFound">
+    `model_name` must match the **deployment name** you created, not the underlying model name. In the Azure OpenAI Studio, navigate to **Deployments** and copy the exact deployment name.
+  </Accordion>
+
+  <Accordion title="ImportError for anthropic / AnthropicFoundry not found">
+    The `anthropic` package is required for Anthropic-type deployments. Install it with:
+    ```bash
+    pip install anthropic
+    ```
+    Then verify your endpoint matches the format provided in the Azure AI Foundry portal.
+  </Accordion>
+
+  <Accordion title="AuthenticationError: 401 Unauthorized">
+    The key may be for a different Azure resource, or the resource's access control settings may require an Azure AD token instead of a key. Verify that **Key-based authentication** is enabled on the resource, or configure `AzureOpenAI` with `azure_ad_token_provider` via a custom client in `**kwargs`.
+  </Accordion>
+
+  <Accordion title="Wrong model_type selected (auto-detect mismatch)">
+    If the provider initializes the wrong client, set `model_type` explicitly: `model_type="openai"`, `model_type="anthropic"`, or `model_type="inference"`. This bypasses heuristic detection entirely.
+  </Accordion>
+</AccordionGroup>

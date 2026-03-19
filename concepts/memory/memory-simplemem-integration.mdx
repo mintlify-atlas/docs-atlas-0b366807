@@ -1,0 +1,299 @@
+---
+title: "SimpleMem Integration"
+description: "Complete API reference for AgentrySimpleMem, including constructor parameters, methods, and cross-session configuration."
+---
+
+`AgentrySimpleMem` is the class that powers long-term memory in Logicore. It manages a per-user (or per-session) LanceDB table, queues dialogue turns for processing, and serves semantic retrieval results to the agent's LLM context.
+
+Import path:
+
+```python
+from logicore.simplemem import AgentrySimpleMem
+```
+
+## Default Integration
+
+When you create an agent with `memory=True`, Logicore automatically instantiates `AgentrySimpleMem` and wires it into the chat loop:
+
+```python
+from logicore.agents.agent import Agent
+
+agent = Agent(
+    llm="ollama",
+    memory=True
+)
+
+# The instance is accessible at agent.simplemem
+print(type(agent.simplemem))  # <class 'AgentrySimpleMem'>
+```
+
+You do not need to instantiate or call it manually for typical use — the agent handles `on_user_message()`, `on_assistant_message()`, and `process_pending()` automatically.
+
+## Constructor Parameters
+
+<ParamField path="user_id" type="str" required>
+  Identifier for the user or agent role. Used as part of the LanceDB table name. All non-alphanumeric characters are replaced with underscores.
+</ParamField>
+
+<ParamField path="session_id" type="str" default="default">
+  Session identifier. Combined with `user_id` to form the table name when `isolate_by_session=True`. Can be any string — it is sanitised before use.
+</ParamField>
+
+<ParamField path="max_context_entries" type="int" default="5">
+  Maximum number of memory strings returned by a single retrieval call. Maps directly to the `top_k` parameter of the vector search.
+</ParamField>
+
+<ParamField path="enable_background_processing" type="bool" default="True">
+  Reserved for future background thread processing. Currently, all processing is driven by explicit `process_pending()` calls.
+</ParamField>
+
+<ParamField path="isolate_by_session" type="bool" default="True">
+  When `True`, each `session_id` maps to a separate LanceDB table (`memories_<user>_<session>`). When `False`, all sessions for a `user_id` share a single table (`memories_<user>`), enabling cross-session recall.
+</ParamField>
+
+<ParamField path="debug" type="bool" default="False">
+  Enables verbose logging to stdout. Logs include table initialization, queued dialogue snippets, retrieval counts, and processing results.
+</ParamField>
+
+## Methods
+
+### `on_user_message(content) -> List[str]`
+
+Called when the user sends a message. Queues the message for later persistence and immediately performs a semantic search to return relevant memory strings for LLM context augmentation.
+
+```python
+contexts: List[str] = await memory.on_user_message(
+    "What database am I using for the payments service?"
+)
+# Returns: ["[User][score=4] Payments service uses PostgreSQL 15"]
+```
+
+Retrieval is pure embedding search — no LLM calls. Target latency is 10–50 ms.
+
+### `on_assistant_message(content)`
+
+Called after the assistant responds. Queues the response for later processing by `process_pending()`.
+
+```python
+await memory.on_assistant_message(
+    "Based on our previous discussion, you're using PostgreSQL 15."
+)
+```
+
+### `process_pending()`
+
+Processes the dialogue queue and persists qualifying facts to LanceDB. This is called automatically by `Agent` after each chat turn.
+
+```python
+# Manually flush the queue
+await memory.process_pending()
+```
+
+Internal steps:
+1. Drains `_dialogue_queue` under a lock.
+2. For each queued `Dialogue`, calls `_should_store_dialogue()` to gate on signal score.
+3. Calls `_extract_atomic_facts()` to split the turn into scored fact strings.
+4. Constructs `MemoryEntry` objects and calls `VectorStore.add_entries()`.
+
+### `get_stats() -> Dict[str, Any]`
+
+Returns a snapshot of the current memory state:
+
+```python
+stats = memory.get_stats()
+# {
+#   "user_id": "alice",
+#   "session_id": "sprint-12",
+#   "table_name": "memories_alice_sprint_12",
+#   "initialized": True,
+#   "pending_dialogues": 2,
+#   "total_memories": 34
+# }
+```
+
+### `clear_memories()`
+
+Drops the entire LanceDB table for this user/session. The table will be recreated on the next write.
+
+```python
+memory.clear_memories()
+```
+
+<Warning>
+  `clear_memories()` permanently deletes all stored facts for the configured table. This cannot be undone.
+</Warning>
+
+## Integration Examples
+
+<Tabs>
+  <Tab title="Agent (auto-managed)">
+    The recommended approach — pass `memory=True` and let the agent manage everything:
+
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(llm="ollama", memory=True, tools=True)
+
+    await agent.chat("I work in the payments team", session_id="alice")
+    reply = await agent.chat("What team am I in?", session_id="alice")
+    print(reply)  # Recalls the payments team fact
+    ```
+  </Tab>
+  <Tab title="BasicAgent">
+    ```python
+    from logicore.agents.agent_basic import BasicAgent
+
+    agent = BasicAgent(
+        provider="ollama",
+        memory_enabled=True
+    )
+
+    response = await agent.chat("Remember that I prefer concise responses")
+    print(response)
+    ```
+  </Tab>
+  <Tab title="MCPAgent">
+    ```python
+    from logicore.agents.agent_mcp import MCPAgent
+
+    agent = MCPAgent(
+        provider="ollama",
+        mcp_config_path="mcp.json",
+        memory=True
+    )
+
+    await agent.init_mcp_servers()
+    response = await agent.chat(
+        "Remember project codename is Atlas",
+        session_id="ops"
+    )
+    ```
+  </Tab>
+  <Tab title="Manual instance">
+    Use a standalone `AgentrySimpleMem` instance when you need fine-grained control:
+
+    ```python
+    from logicore.simplemem import AgentrySimpleMem
+
+    memory = AgentrySimpleMem(
+        user_id="alice",
+        session_id="sprint-12",
+        max_context_entries=8,
+        isolate_by_session=True,
+        debug=True
+    )
+
+    # Retrieve relevant context before an LLM call
+    contexts = await memory.on_user_message("What stack are we using?")
+
+    # Queue the assistant response after the LLM call
+    await memory.on_assistant_message("You are using FastAPI + PostgreSQL.")
+
+    # Flush at end of request
+    await memory.process_pending()
+    ```
+  </Tab>
+</Tabs>
+
+## Cross-Session Shared Memory
+
+By default, each session writes to and reads from its own LanceDB table. To share one memory pool across all sessions for the same user, replace the default `simplemem` instance after agent creation:
+
+```python
+from logicore.agents.agent import Agent
+from logicore.simplemem import AgentrySimpleMem
+
+agent = Agent(llm="ollama", memory=True)
+
+# Override with a shared-table configuration
+agent.simplemem = AgentrySimpleMem(
+    user_id=agent.role,
+    session_id="global",      # session_id is ignored when isolate_by_session=False
+    isolate_by_session=False, # all sessions use memories_<user_id>
+    debug=True
+)
+
+# Facts from session s1 are visible in session s2
+await agent.chat("My preferred stack is FastAPI + PostgreSQL", session_id="s1")
+reply = await agent.chat("What stack do I prefer?", session_id="s2")
+print(reply)  # Recalls the FastAPI + PostgreSQL preference
+```
+
+<Note>
+  When `isolate_by_session=False`, changing the `session_id` on the agent has no effect on which LanceDB table is used. All sessions resolve to `memories_<user_id>`.
+</Note>
+
+## Table Naming
+
+Table names are derived by `get_memory_table_name()` from `logicore.simplemem.config`:
+
+```python
+from logicore.simplemem.config import get_memory_table_name
+
+# Per-session (default)
+get_memory_table_name("alice", "sprint-12", isolate_by_session=True)
+# -> "memories_alice_sprint_12"
+
+# Shared per-user
+get_memory_table_name("alice", isolate_by_session=False)
+# -> "memories_alice"
+```
+
+Non-alphanumeric characters in `user_id` and `session_id` are replaced with underscores.
+
+## Embedding Backend
+
+`AgentrySimpleMem` uses `EmbeddingModel` for both storing and retrieving memories. The default backend is Ollama with the `qwen3-embedding:0.6b` model (1024-dimensional embeddings).
+
+```python
+from logicore.simplemem.config import get_embedding_config
+
+print(get_embedding_config())
+# {
+#   "provider": "ollama",
+#   "model": "qwen3-embedding:0.6b",
+#   "ollama_url": "http://localhost:11434"
+# }
+```
+
+Override the embedding model with the `EMBEDDING_MODEL` environment variable:
+
+```bash
+export EMBEDDING_MODEL="nomic-embed-text"   # 768-dim
+export EMBEDDING_MODEL="mxbai-embed-large"  # 1024-dim
+```
+
+<Note>
+  Changing the embedding model after data has been written to a table is not supported. The vector dimensions must match. Create a new table (use a different `session_id` or call `clear_memories()`) when switching models.
+</Note>
+
+## Observability
+
+```python
+# Enable debug logging on the instance
+agent.simplemem.debug = True
+
+# Force-flush and inspect stats in one block
+await agent.simplemem.process_pending()
+stats = agent.simplemem.get_stats()
+print(f"Table: {stats['table_name']}")
+print(f"Stored memories: {stats['total_memories']}")
+print(f"Pending in queue: {stats['pending_dialogues']}")
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Stable session IDs" icon="fingerprint">
+    Use stable, unique session IDs for workflows that need continuity (e.g., `user-<id>-<project>`). Avoid random UUIDs if you want memory to persist across restarts.
+  </Card>
+  <Card title="Shared tables for user profiles" icon="user">
+    Use `isolate_by_session=False` only when you want a persistent user profile that spans all sessions. This is ideal for personal assistants, not multi-tenant services.
+  </Card>
+  <Card title="Avoid storing sensitive data" icon="shield">
+    Do not store PII, credentials, or regulated data unless you have appropriate access controls and data governance policies in place.
+  </Card>
+  <Card title="Monitor total_memories" icon="chart-bar">
+    Use `get_stats()` periodically to track table growth. Call `clear_memories()` and rebuild if the table becomes stale or oversized.
+  </Card>
+</CardGroup>

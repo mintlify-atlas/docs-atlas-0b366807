@@ -1,0 +1,307 @@
+---
+title: "FAQ"
+description: "Answers to common questions about installing, configuring, and using the Logicore AI Framework."
+---
+
+<AccordionGroup>
+
+  {/* ── Installation ── */}
+
+  <Accordion title="What Python version does Logicore require?">
+    Logicore requires **Python 3.10 or later**. It is tested against Python 3.10, 3.11, 3.12, and 3.13.
+
+    ```bash
+    python --version   # must be >= 3.10
+    ```
+  </Accordion>
+
+  <Accordion title="How do I install Logicore?">
+    Install the core package with pip:
+
+    ```bash
+    pip install logicore
+    ```
+
+    For a specific provider, install the matching extra:
+
+    ```bash
+    pip install "logicore[gemini]"      # Google Gemini
+    pip install "logicore[groq]"        # Groq
+    pip install "logicore[ollama]"      # Local Ollama models
+    pip install "logicore[azure]"       # Azure OpenAI / AI Foundry
+    pip install "logicore[anthropic]"   # Anthropic Claude
+    pip install "logicore[all]"         # Every provider + all optional deps
+    ```
+  </Accordion>
+
+  <Accordion title="How do I install built-in document and office tools?">
+    Built-in tools that handle PDFs, Word, PowerPoint, and Excel files live behind the `tools` extra:
+
+    ```bash
+    pip install "logicore[tools]"
+    ```
+
+    This installs `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, and `playwright`.
+  </Accordion>
+
+  <Accordion title="How do I verify the installation?">
+    Create a short script and run it:
+
+    ```python
+    import asyncio
+    from logicore.providers.ollama_provider import OllamaProvider
+    from logicore.agents.agent import Agent
+
+    async def main():
+        provider = OllamaProvider(model_name="qwen3.5:0.8b")
+        agent = Agent(llm=provider, role="Greeter")
+        response = await agent.chat("Say hello!")
+        print(response['content'])
+
+    asyncio.run(main())
+    ```
+
+    If you see a greeting printed, the installation is working correctly.
+  </Accordion>
+
+  <Accordion title="Do I need a virtual environment?">
+    It is strongly recommended. Use `venv` or any compatible tool:
+
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate   # Windows: .venv\Scripts\activate
+    pip install logicore
+    ```
+  </Accordion>
+
+  {/* ── Providers ── */}
+
+  <Accordion title="Do I need a specific model provider to use Logicore?">
+    No. Logicore supports multiple providers through a unified agent API. You can use:
+
+    - **Ollama** — fully local, no API key required
+    - **Gemini** — Google's cloud models
+    - **Groq** — fast cloud inference
+    - **Azure OpenAI / AI Foundry / AI Inference** — enterprise Azure hosting
+    - **Anthropic** — Claude models via Azure AI Foundry or direct
+
+    Your agent code does not change when you swap providers:
+
+    ```python
+    agent = Agent(llm="ollama")   # local
+    agent = Agent(llm="gemini")   # cloud
+    agent = Agent(llm="groq")     # fast inference
+    ```
+  </Accordion>
+
+  <Accordion title="Where do I set my API keys?">
+    Use environment variables — never hardcode secrets in source code:
+
+    ```bash
+    # Gemini
+    export GEMINI_API_KEY="your-key"
+
+    # OpenAI / Azure
+    export OPENAI_API_KEY="your-key"
+    export AZURE_API_KEY="your-key"
+    export AZURE_ENDPOINT="https://your-resource.openai.azure.com"
+
+    # Groq
+    export GROQ_API_KEY="your-key"
+
+    # Anthropic
+    export ANTHROPIC_API_KEY="your-key"
+    ```
+
+    You can also load them from a `.env` file with `python-dotenv`, which is included as a core dependency.
+  </Accordion>
+
+  <Accordion title="How do I use a local Ollama model?">
+    First ensure [Ollama](https://ollama.com) is installed and running, then pull the model you want:
+
+    ```bash
+    ollama run qwen3.5:0.8b
+    ```
+
+    Then point the agent at it:
+
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(llm="ollama", model="qwen3.5:0.8b")
+    ```
+
+    No API key is needed for local Ollama usage.
+  </Accordion>
+
+  <Accordion title="How do I use Azure AI Foundry or Azure AI Inference endpoints?">
+    Pass a `model_type` argument to `AzureProvider`:
+
+    ```python
+    from logicore.providers.azure_provider import AzureProvider
+
+    provider = AzureProvider(
+        model_name="gpt-4o-mini",
+        endpoint="https://your-resource.openai.azure.com",
+        api_key="your-key",
+        model_type="openai"   # "openai" | "anthropic" | "inference"
+    )
+    ```
+
+    If `model_type` is omitted, Logicore auto-detects it from the endpoint and deployment name.
+  </Accordion>
+
+  <Accordion title="Can I switch providers without rewriting my agent logic?">
+    Yes — that is one of Logicore's primary design goals. The provider is injected at construction time; all tool schemas, approval workflows, memory, and streaming callbacks remain unchanged.
+
+    ```python
+    # Exact same agent logic, different provider
+    agent_local = Agent(llm="ollama", tools=[my_tool])
+    agent_cloud = Agent(llm="gemini", tools=[my_tool])
+    ```
+  </Accordion>
+
+  {/* ── Tools ── */}
+
+  <Accordion title="How do I register a custom tool?">
+    Pass any Python function with a docstring and type hints to the `tools` parameter:
+
+    ```python
+    def get_stock_price(ticker: str, **kwargs) -> float:
+        """Returns the current price for a stock ticker symbol."""
+        ...
+
+    agent = Agent(llm="ollama", tools=[get_stock_price])
+    ```
+
+    Logicore automatically parses the type hints into a JSON schema and the docstring into a description. The `**kwargs` absorbs any hallucinated parameters, which improves reliability with local models.
+  </Accordion>
+
+  <Accordion title="How do I enable built-in tools?">
+    Pass `tools=True` to use the full default registry:
+
+    ```python
+    agent = Agent(llm="ollama", tools=True)
+    ```
+
+    Or load them after construction:
+
+    ```python
+    agent.load_default_tools()
+    ```
+
+    Built-in categories include: filesystem, code execution, git, web search, document handling, Office/PDF, media search, and cron scheduling.
+  </Accordion>
+
+  <Accordion title="How do tools get approved before execution?">
+    By default, each tool call awaits an approval callback. For development or trusted environments you can auto-approve:
+
+    ```python
+    agent.set_auto_approve_all(True)
+    ```
+
+    For production, supply a custom callback to allow or deny individual tools:
+
+    ```python
+    async def approve_tool(session_id, tool_name, args):
+        if tool_name == "delete_file":
+            return False   # deny destructive operations
+        return True
+
+    agent.set_callbacks(on_tool_approval=approve_tool)
+    ```
+  </Accordion>
+
+  <Accordion title="Why is my agent not calling the tool I registered?">
+    Common causes:
+
+    - **Missing docstring** — The tool description is extracted from the docstring. Without one, the LLM has no signal for when to call it.
+    - **Tool not registered** — Confirm `tools=[your_function]` is in the constructor or that `agent.add_tool(fn)` was called.
+    - **Debug mode off** — Enable `debug=True` to see what the LLM receives and returns.
+
+    ```python
+    agent = Agent(llm="ollama", tools=[my_tool], debug=True)
+    ```
+  </Accordion>
+
+  <Accordion title="How do I prevent infinite tool-call loops?">
+    Set `max_iterations` in the constructor:
+
+    ```python
+    agent = Agent(llm="ollama", tools=[...], max_iterations=5)
+    ```
+
+    The default is 20. Once the limit is reached the agent returns the current best answer.
+  </Accordion>
+
+  {/* ── Memory ── */}
+
+  <Accordion title="Does Logicore support persistent memory across sessions?">
+    Yes. Set `memory=True` and the agent stores and retrieves facts using a vector-backed store (LanceDB via `AgentrySimpleMem`):
+
+    ```python
+    agent = Agent(llm="ollama", memory=True)
+
+    await agent.chat("My name is Alice")
+    await agent.chat("What is my name?")  # → "Your name is Alice"
+    ```
+
+    Memory entries are atomically extracted from conversation turns and embedded for semantic retrieval.
+  </Accordion>
+
+  <Accordion title="What is the difference between short-term and long-term memory?">
+    | Type | Scope | Storage |
+    |------|----|--------|
+    | **Short-term** | Active session conversation history | In-memory list of messages |
+    | **Long-term** | Facts extracted across sessions | LanceDB vector table (persistent on disk) |
+
+    You can select the type via `memory_type`:
+
+    ```python
+    agent = Agent(llm="ollama", memory=True, memory_type="long_term")
+    ```
+
+    Options are `"default"`, `"short_term"`, and `"long_term"`.
+  </Accordion>
+
+  <Accordion title="How does Logicore decide what to store in long-term memory?">
+    `AgentrySimpleMem` applies a filtering and scoring pass before writing to the vector store. It skips:
+
+    - Small talk and vague acknowledgements
+    - Transient reminder chatter
+    - Low-signal content
+
+    Only atomic, high-signal facts with a score above the threshold are persisted. This reduces memory contamination and keeps retrieval relevant.
+  </Accordion>
+
+  {/* ── Performance & Streaming ── */}
+
+  <Accordion title="Does Logicore support streaming?">
+    Yes. Pass `stream=True` and an `on_token` callback:
+
+    ```python
+    def on_token(token):
+        print(token, end="", flush=True)
+
+    response = await agent.chat(
+        "Explain quantum computing.",
+        callbacks={"on_token": on_token},
+        stream=True
+    )
+    ```
+
+    Logicore also extracts hidden `<think>` reasoning tokens from models that support them (such as `qwen3.5` and DeepSeek variants), letting your UI display the model's reasoning in real time.
+  </Accordion>
+
+  <Accordion title="How do I run the documentation site locally?">
+    The docs site is built with Mintlify. From the repository root:
+
+    ```bash
+    npm install
+    npm run dev
+    ```
+
+    The dev server starts at `http://localhost:3000` by default.
+  </Accordion>
+
+</AccordionGroup>

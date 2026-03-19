@@ -1,0 +1,243 @@
+---
+title: "Dynamic tool loading"
+description: "How MCPAgent manages large tool catalogs through deferred loading, the tool registry, and on-demand tool discovery."
+---
+
+When an agent has access to many tools — from a combination of built-in Logicore tools and one or more MCP servers — sending every tool schema on every turn becomes expensive. It consumes context budget and can hurt latency.
+
+`MCPAgent` solves this with **deferred tool loading**: tools are registered in an internal registry but not sent to the model until the model explicitly searches for and selects them.
+
+## Two loading modes
+
+<Tabs>
+  <Tab title="Normal mode">
+    All tools are exposed to the model in every turn.
+
+    Used when:
+    - Total tools (default + MCP) is **below** `tool_threshold` (default `15`), **and**
+    - `deferred_tools=False` (the default)
+
+    ```python
+    agent = MCPAgent(
+        provider="ollama",
+        model="qwen2:7b",
+        mcp_config_path="mcp.json",
+        tool_threshold=15,  # default
+    )
+    await agent.init_mcp_servers()
+    # total tools < 15 -> all tools loaded normally
+    response = await agent.chat("List available file tools")
+    ```
+  </Tab>
+  <Tab title="Deferred mode">
+    Only `tool_search_regex` is sent initially. The model searches for tools, which are then loaded and become callable.
+
+    Used when:
+    - Total tools **>=** `tool_threshold`, **or**
+    - `deferred_tools=True` explicitly
+
+    ```python
+    agent = MCPAgent(
+        provider="openai",
+        model="gpt-4o-mini",
+        mcp_config_path="mcp.json",
+        tool_threshold=15,
+    )
+    await agent.init_mcp_servers()
+    # total tools >= 15 -> deferred mode auto-enables
+    response = await agent.chat("Find tools for reading docs and summarize README")
+    ```
+  </Tab>
+</Tabs>
+
+## Decision rules
+
+`MCPAgent` applies the following logic after `init_mcp_servers()` completes:
+
+<AccordionGroup>
+  <Accordion title="Case 1: Small tool count (below threshold)">
+    If `(default tools + MCP tools) < tool_threshold` and `deferred_tools=False`:
+
+    - Agent stays in normal mode.
+    - All tools are sent to the model on every turn.
+    - No discovery step is required.
+
+    ```python
+    agent = MCPAgent(provider="ollama", tool_threshold=15)
+    # 8 default tools + 4 MCP tools = 12 total -> normal mode
+    ```
+  </Accordion>
+  <Accordion title="Case 2: Large tool count (at or above threshold)">
+    If `(default tools + MCP tools) >= tool_threshold` and `deferred_tools=False`:
+
+    - `_auto_deferred` is set to `True`.
+    - All tools are registered in `_tool_registry`.
+    - The model initially receives only `tool_search_regex` plus any already-loaded tools.
+    - Tools found via search are added to `_loaded_tools` and become callable in subsequent turns.
+
+    ```python
+    agent = MCPAgent(provider="ollama", tool_threshold=15)
+    # 8 default tools + 10 MCP tools = 18 total -> deferred mode auto-enables
+    ```
+  </Accordion>
+  <Accordion title="Case 3: Explicit deferred mode">
+    If `deferred_tools=True`:
+
+    - Deferred mode is enabled regardless of the total tool count.
+    - Useful when you always want controlled, incremental tool exposure.
+
+    ```python
+    agent = MCPAgent(
+        provider="ollama",
+        deferred_tools=True,  # always deferred
+        tool_threshold=15,
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Internal data structures
+
+| Attribute | Type | Description |
+|---|---|---|
+| `_tool_registry` | `Dict[str, dict]` | All known tool schemas, keyed by tool name. Populated from default tools and MCP tools during init. |
+| `_loaded_tools` | `Set[str]` | Names of tools currently exposed to the model. Grows as the model discovers tools via search. |
+| `_auto_deferred` | `bool` | `True` when deferred mode was triggered automatically by the threshold, rather than set explicitly. |
+| `tool_threshold` | `int` | The count at which auto-deferred mode activates. Default `15`. |
+
+## The tool_search_regex tool
+
+In deferred mode the model receives a single special tool:
+
+```python
+# Schema registered automatically by MCPAgent
+{
+    "type": "function",
+    "function": {
+        "name": "tool_search_regex",
+        "description": "Search for available tools using a regex pattern ...",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to match against tool names and descriptions. Case-insensitive."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of tools to return (default: 10, max: 50)",
+                    "default": 10
+                }
+            },
+            "required": ["pattern"]
+        }
+    }
+}
+```
+
+When the model calls `tool_search_regex`, `MCPAgent._execute_tool()` intercepts it and runs `_search_tools()`, which:
+
+1. Compiles the pattern as a case-insensitive regex.
+2. Iterates `_tool_registry` and matches against both `name` and `description`.
+3. Adds matching tool names to `_loaded_tools`.
+4. Returns a result dict with `status`, `tools`, and `newly_loaded`.
+
+```python
+# Example search result returned to the model
+{
+    "status": "success",
+    "pattern": "file",
+    "total_matches": 4,
+    "tools": [
+        {"name": "read_file", "description": "Read a file ...", "loaded": True},
+        {"name": "write_file", "description": "Write content ...", "loaded": True},
+        ...
+    ],
+    "newly_loaded": 4,
+    "message": "Found 4 tools. They are now available for use."
+}
+```
+
+On the next model turn those tools appear in the active tool list and can be called directly.
+
+## Adding tools to the deferred registry
+
+### Programmatic registration
+
+```python
+custom_schema = {
+    "type": "function",
+    "function": {
+        "name": "query_database",
+        "description": "Run a SQL query against the production database.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "SQL query string"}
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+# Register but keep deferred (requires search to load)
+agent.register_tool_deferred(custom_schema, preload=False)
+
+# Register and preload (available immediately)
+agent.register_tool_deferred(custom_schema, preload=True)
+```
+
+### Preloading known-useful tools
+
+```python
+# After init_mcp_servers(), preload high-frequency tools
+await agent.init_mcp_servers()
+agent.preload_tools(["read_file", "list_directory"])
+
+# These tools are now in _loaded_tools and visible to the model
+# without requiring a tool_search_regex call
+```
+
+### Registering a function directly
+
+When `register_tool_from_function()` is called on an `MCPAgent` that is already in deferred mode, the tool is added to both `internal_tools` and `_loaded_tools` (preloaded), since custom tools are assumed to be immediately useful:
+
+```python
+def send_alert(message: str) -> str:
+    """Send an alert message to the operations team."""
+    # ... implementation ...
+    return f"Alert sent: {message}"
+
+agent.register_tool_from_function(send_alert)
+# In deferred mode: added to registry AND preloaded
+```
+
+## Inspecting registry state
+
+```python
+stats = agent.get_registry_stats()
+print(stats)
+# {
+#     "total_registered": 42,
+#     "loaded": 7,
+#     "deferred": 35,
+#     "deferred_mode": True,
+#     "auto_deferred": True,
+#     "threshold": 15,
+#     "tool_names": ["read_file", "write_file", ...]
+# }
+```
+
+## Practical recommendations
+
+<Tip>
+  Keep the default `tool_threshold=15` unless you have measured latency or context-budget problems. The auto-deferred mechanism handles the switch transparently.
+</Tip>
+
+<Tip>
+  Write clear, specific tool names and descriptions. The model uses regex search on both fields, so terms like `"csv"`, `"database"`, or `"email"` in descriptions make tools reliably discoverable.
+</Tip>
+
+<Note>
+  Tools found via `tool_search_regex` are permanently added to `_loaded_tools` for the lifetime of the agent instance. There is no built-in mechanism to unload a tool once it has been loaded. If you need to restrict tool access per session, manage that at the session creation layer instead.
+</Note>

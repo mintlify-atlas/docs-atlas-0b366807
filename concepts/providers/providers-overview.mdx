@@ -1,0 +1,282 @@
+---
+title: "Providers Overview"
+description: "Compare every supported LLM provider and learn how Logicore's gateway layer normalizes them into a single interface."
+---
+
+Logicore treats each LLM vendor as a **swappable provider**. Your agent code stays the same — you inject a different provider instance to change cost, latency, or data residency. The Provider Gateway normalizes request and response formats so the `Agent` never needs to know which backend is in use.
+
+## Provider comparison
+
+| Provider | Best for | Typical latency | Relative cost | Tool calling | Vision | Local execution |
+|---|---|---|---|---|---|---|
+| **OpenAI** | Highest quality, broad ecosystem | Fast | $$$ | Full | Yes (`gpt-4o` family) | No |
+| **Groq** | Speed + low cost | Ultra fast | $ | Full | Yes (vision models) | No |
+| **Ollama** | Local / air-gapped, privacy-sensitive | Hardware-dependent | Free | Limited | Yes (vision models) | Yes |
+| **Gemini** | Vision + multimodal, long context | Fast | $$ | Full | Yes (native) | No |
+| **Azure** | Enterprise, regional compliance | Fast | $$$ | Full | Deployment-dependent | No |
+| **Anthropic** | Long reasoning-heavy tasks | Medium | $$–$$$ | Full | Yes | No |
+
+### Capability matrix
+
+| Capability | OpenAI | Groq | Ollama | Gemini | Azure | Anthropic |
+|---|---|---|---|---|---|---|
+| Tool calling | Full | Full | Limited | Full | Full | Full |
+| Vision / images | Yes | Yes | Yes | Yes | Yes | Yes |
+| Streaming | Yes | Yes | Yes | Yes | Yes | Yes |
+| Max context | 128K | 8K–128K | 8K–32K | 32K–2M | 128K | 200K |
+| Reasoning | Limited | — | — | Yes | Yes | Yes |
+
+<Info>
+Ollama's tool-calling support depends on the model. Newer models like `qwen3` and `llama3.3` support it; older or smaller models may not.
+</Info>
+
+## The `LLMProvider` base class
+
+Every provider in Logicore inherits from `LLMProvider`, defined in `logicore/providers/base.py`. The abstract interface guarantees three methods are always available:
+
+```python
+from abc import ABC, abstractmethod
+from typing import List, Dict, Any, Optional, Callable
+
+class LLMProvider(ABC):
+    @abstractmethod
+    def __init__(self, model_name: str, api_key: Optional[str] = None, **kwargs):
+        pass
+
+    @abstractmethod
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None
+    ) -> Any:
+        """Non-streaming chat request."""
+        pass
+
+    @abstractmethod
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        on_token: Optional[Callable[[str], None]] = None
+    ) -> Any:
+        """Streaming chat; on_token fires for every token."""
+        pass
+
+    @abstractmethod
+    def get_model_name(self) -> str:
+        pass
+```
+
+The `Agent` class never calls a provider directly. It goes through the **Provider Gateway**, which normalizes each provider's request and response format to a single canonical shape.
+
+## Provider Gateway architecture
+
+The gateway sits between `Agent` and the underlying provider SDK:
+
+```
+Agent (provider-agnostic)
+        │
+        │  chat() / chat_stream()
+        ▼
+Provider Gateway  ──────────────────────────────────────────────┐
+  OpenAIGateway   →  OpenAI API  (gpt-4o, gpt-4o-mini, …)      │
+  OpenAIGateway   →  Groq API    (llama-3.3-70b-versatile, …)   │  Normalized
+  GeminiGateway   →  Gemini API  (gemini-1.5-flash, …)          │  response
+  AzureGateway    →  Azure AI    (deployments)                  │
+  OllamaGateway   →  Ollama      (local models)                 │
+        │                                                        │
+        └────────────────────────────────────────────────────────┘
+        │
+        ▼
+  NormalizedMessage { role, content, tool_calls }
+```
+
+The `get_gateway_for_provider()` factory selects the right gateway based on `provider.provider_name`:
+
+```python
+from logicore.providers.gateway import get_gateway_for_provider
+from logicore.providers.groq_provider import GroqProvider
+
+provider = GroqProvider(model_name="llama-3.3-70b-versatile")
+gateway = get_gateway_for_provider(provider)  # → OpenAIGateway (Groq is OpenAI-compatible)
+```
+
+## Instantiating providers
+
+All providers follow the same constructor pattern:
+
+```python
+ProviderClass(model_name="<model>", api_key="<key>", **extra_kwargs)
+```
+
+The `api_key` falls back to the provider's canonical environment variable when omitted.
+
+<CodeGroup>
+
+```python openai
+from logicore.providers.openai_provider import OpenAIProvider
+
+provider = OpenAIProvider(
+    model_name="gpt-4o-mini",
+    api_key="sk-..."  # or set OPENAI_API_KEY
+)
+```
+
+```python groq
+from logicore.providers.groq_provider import GroqProvider
+
+provider = GroqProvider(
+    model_name="llama-3.3-70b-versatile",
+    api_key="gsk_..."  # or set GROQ_API_KEY
+)
+```
+
+```python ollama
+from logicore.providers.ollama_provider import OllamaProvider
+
+# No API key required for local models
+provider = OllamaProvider(model_name="qwen2:7b")
+```
+
+```python gemini
+from logicore.providers.gemini_provider import GeminiProvider
+
+provider = GeminiProvider(
+    model_name="gemini-1.5-flash",
+    api_key="AIza..."  # or set GEMINI_API_KEY / GOOGLE_API_KEY
+)
+```
+
+```python azure
+from logicore.providers.azure_provider import AzureProvider
+
+provider = AzureProvider(
+    model_name="gpt-4o-mini",     # Azure deployment name
+    endpoint="https://your-resource.openai.azure.com",
+    api_key="...",                # or set AZURE_API_KEY
+    model_type="openai"           # openai | anthropic | inference
+)
+```
+
+</CodeGroup>
+
+## Plugging a provider into an Agent
+
+```python
+import asyncio
+from logicore import Agent
+from logicore.providers.groq_provider import GroqProvider
+
+async def main():
+    provider = GroqProvider(model_name="llama-3.3-70b-versatile")
+
+    agent = Agent(
+        llm=provider,
+        role="Assistant",
+        system_message="Be concise."
+    )
+
+    result = await agent.chat("What is retrieval-augmented generation?")
+    print(result["content"])
+
+asyncio.run(main())
+```
+
+Swapping the provider requires changing **one line** — the `Agent` and all tool logic are unaffected.
+
+## Failover pattern
+
+```python
+from logicore import Agent
+from logicore.providers.groq_provider import GroqProvider
+from logicore.providers.openai_provider import OpenAIProvider
+
+def make_agent(primary, fallback):
+    try:
+        return Agent(llm=primary)
+    except Exception:
+        return Agent(llm=fallback)
+
+agent = make_agent(
+    primary=GroqProvider(model_name="llama-3.3-70b-versatile"),
+    fallback=OpenAIProvider(model_name="gpt-4o-mini")
+)
+```
+
+<Tip>
+Capture per-provider latency and error rate at runtime and route traffic dynamically based on those metrics.
+</Tip>
+
+## Canonical multimodal message format
+
+All providers accept the same input structure for text and image messages:
+
+```python
+message = [
+    {"type": "text", "text": "Describe this image."},
+    {"type": "image_url", "image_url": "/path/to/image.png"}
+]
+
+result = await agent.chat(message)
+```
+
+`image_url` can be a local file path, an `https://` URL, or a `data:image/...;base64,...` string. The gateway normalizes the format for whichever provider is in use.
+
+## Custom provider
+
+Implement `LLMProvider` to wrap any internal or proprietary API:
+
+```python
+from logicore.providers.base import LLMProvider
+from typing import List, Dict, Any, Optional, Callable
+
+class InternalLLMProvider(LLMProvider):
+    def __init__(self, endpoint: str, api_key: str):
+        self.endpoint = endpoint
+        self.api_key = api_key
+        self.model_name = "internal-model"
+
+    async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None
+    ) -> Any:
+        # Transform messages → internal format
+        # Call internal API
+        # Return normalized dict
+        return {"role": "assistant", "content": "...", "tool_calls": []}
+
+    async def chat_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        on_token: Optional[Callable[[str], None]] = None
+    ) -> Any:
+        async for token in stream_from_internal_api(...):
+            if on_token:
+                await on_token(token)
+        return {"role": "assistant", "content": full_content, "tool_calls": []}
+
+    def get_model_name(self) -> str:
+        return self.model_name
+```
+
+## Provider pages
+
+<Columns cols={2}>
+  <Card title="Ollama" icon="server" href="/concepts/providers/provider-ollama">
+    Local models, air-gapped deployments, and free inference.
+  </Card>
+  <Card title="OpenAI" icon="sparkles" href="/concepts/providers/provider-openai">
+    GPT-4o and other OpenAI models with full tool-calling support.
+  </Card>
+  <Card title="Gemini" icon="eye" href="/concepts/providers/provider-gemini">
+    Google Gemini with native multimodal and long-context support.
+  </Card>
+  <Card title="Groq" icon="bolt" href="/concepts/providers/provider-groq">
+    Ultra-fast inference for latency-sensitive workloads.
+  </Card>
+  <Card title="Azure" icon="building" href="/concepts/providers/provider-azure">
+    Enterprise Azure AI with OpenAI, Anthropic, and Inference backends.
+  </Card>
+</Columns>

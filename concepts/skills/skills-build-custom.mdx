@@ -1,0 +1,338 @@
+---
+title: "Build custom skills"
+description: "Create your own SKILL.md package, expose Python tool functions, and place it in your workspace for automatic discovery by any Logicore agent."
+---
+
+Custom skills follow the same directory-based convention as built-in skills. `SkillLoader` discovers them automatically from your workspace when `workspace_root` is set on an agent.
+
+## Skill directory structure
+
+```text
+my-skill/
+├── SKILL.md          # Required — instructions + YAML frontmatter
+├── scripts/          # Optional — Python files with tool functions
+│   └── tools.py
+├── resources/        # Optional — templates, assets
+└── examples/         # Optional — reference implementations
+```
+
+Only `SKILL.md` is required. Add `scripts/` only when your skill needs executable tools.
+
+## Step-by-step guide
+
+<Steps>
+  <Step title="Create the skill directory">
+    Place your skill in one of the workspace discovery paths. `SkillLoader.discover_workspace_skills()` searches these locations relative to `workspace_root`:
+
+    - `.agent/skills/<skill-name>/`
+    - `_agent/skills/<skill-name>/`
+    - `.agents/skills/<skill-name>/`
+    - `_agents/skills/<skill-name>/`
+
+    Example for a skill named `release_assistant`:
+
+    ```text
+    /path/to/project/
+    └── .agent/
+        └── skills/
+            └── release_assistant/
+                ├── SKILL.md
+                └── scripts/
+                    └── tools.py
+    ```
+  </Step>
+
+  <Step title="Write SKILL.md">
+    `SKILL.md` has two parts: a YAML frontmatter block with metadata, and a Markdown body with the instructions injected into the agent's system prompt.
+
+    ```markdown
+    ---
+    name: release_assistant
+    description: Helps with release checklist and changelog hygiene
+    version: 1.0.0
+    author: team-platform
+    tags: [release, docs]
+    requires: [git]
+    ---
+
+    When handling release tasks:
+    1. Validate changed files.
+    2. Summarize user-facing changes.
+    3. Propose changelog entries in Keep a Changelog format.
+    ```
+
+    All frontmatter fields map directly to `SkillMetadata`:
+
+    <ParamField path="name" type="string" required>
+      Unique identifier for the skill. Used to load it by name: `skills=["release_assistant"]`.
+    </ParamField>
+
+    <ParamField path="description" type="string" required>
+      Human-readable description of what the skill does.
+    </ParamField>
+
+    <ParamField path="version" type="string" default="1.0.0">
+      Semantic version string. Defaults to `1.0.0` if omitted.
+    </ParamField>
+
+    <ParamField path="author" type="string">
+      Author name or team identifier.
+    </ParamField>
+
+    <ParamField path="tags" type="string[]">
+      List of topic tags for discoverability, e.g. `[release, docs]`.
+    </ParamField>
+
+    <ParamField path="requires" type="string[]">
+      External dependencies or tools the skill relies on, e.g. `[git]`. Informational only — the agent does not enforce these automatically.
+    </ParamField>
+  </Step>
+
+  <Step title="Add tool functions in scripts/">
+    Create one or more `.py` files inside `scripts/`. `SkillLoader` imports each file and treats every public function with a docstring as a tool.
+
+    ```python
+    # scripts/tools.py
+
+    def summarize_release_notes(text: str) -> str:
+        """Summarize release notes into concise bullet points."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return "\n".join(f"- {line}" for line in lines[:6])
+
+
+    def validate_semver(version: str) -> bool:
+        """Validate whether a version follows semantic versioning."""
+        parts = version.split(".")
+        return len(parts) == 3 and all(p.isdigit() for p in parts)
+    ```
+
+    Tool discovery rules:
+
+    - Functions whose names begin with `_` are skipped.
+    - A docstring is **required** — functions without one are ignored.
+    - Type annotations are used to generate the parameter schema. Unannotated parameters default to `string`.
+    - The docstring becomes the tool's `description` in the schema passed to the model.
+
+    <Tip>
+      Keep tool names clear and domain-specific. `validate_semver` is preferable to `validate` because it avoids name collisions when multiple skills are loaded simultaneously.
+    </Tip>
+  </Step>
+
+  <Step title="Load and verify">
+    Point the agent at your workspace root and request the skill by name:
+
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(
+        llm="ollama",
+        tools=True,
+        workspace_root="/path/to/project"
+    )
+    agent.load_skills(["release_assistant"])
+
+    response = await agent.chat("Prepare release summary for v1.4.0")
+    print(response)
+    ```
+
+    Verify the skill loaded correctly by inspecting `agent.skills`:
+
+    ```python
+    for skill in agent.skills:
+        print(repr(skill))
+        # Skill(name='release_assistant', tools=2, dir=/path/to/project/.agent/skills/release_assistant)
+    ```
+  </Step>
+</Steps>
+
+## The `Skill` base class
+
+All loaded skills are instances of `logicore.skills.base.Skill`. You can also construct a `Skill` object programmatically without a filesystem directory:
+
+```python
+from logicore.skills.base import Skill, SkillMetadata
+
+metadata = SkillMetadata(
+    name="my_skill",
+    description="A programmatically constructed skill",
+    version="1.0.0",
+    author="me",
+    tags=["custom"],
+    requires=[]
+)
+
+skill = Skill(
+    metadata=metadata,
+    instructions="When answering, always cite your sources.",
+    tools=[],           # List of OpenAI-format tool schema dicts
+    tool_executors={},  # Dict mapping function name -> callable
+    system_prompt_addon=None,
+    skill_dir=None
+)
+
+agent.load_skill(skill)
+```
+
+### `Skill` constructor parameters
+
+<ParamField path="metadata" type="SkillMetadata" required>
+  A `SkillMetadata` dataclass instance with `name`, `description`, `version`, `author`, `tags`, and `requires`.
+</ParamField>
+
+<ParamField path="instructions" type="string" required>
+  Markdown instructions injected into the agent's system prompt inside `<skills>` tags.
+</ParamField>
+
+<ParamField path="tools" type="list" default="[]">
+  List of tool schema dicts in OpenAI function-calling format. Each entry has `type: "function"` and a nested `function` object with `name`, `description`, and `parameters`.
+</ParamField>
+
+<ParamField path="tool_executors" type="dict" default="{}">
+  Dict mapping tool function names to their Python callables, used at runtime when the model invokes a skill tool.
+</ParamField>
+
+<ParamField path="system_prompt_addon" type="string">
+  Optional additional text appended directly to the system prompt, separate from the `<skills>` block.
+</ParamField>
+
+<ParamField path="skill_dir" type="Path">
+  `pathlib.Path` to the skill's root directory. Used by `get_scripts_dir()` and `get_resources_dir()` helpers. Set to `None` for programmatically constructed skills.
+</ParamField>
+
+## The `SkillLoader` class
+
+`SkillLoader` is a static-method utility class in `logicore.skills.loader`. It handles all filesystem-based skill operations.
+
+<AccordionGroup>
+  <Accordion title="SkillLoader.load(skill_dir)">
+    Load a single skill from a directory path. Returns a `Skill` instance, or `None` if `SKILL.md` is missing or parsing fails.
+
+    ```python
+    from logicore.skills.loader import SkillLoader
+
+    skill = SkillLoader.load("/path/to/project/.agent/skills/release_assistant")
+    if skill:
+        print(skill.name, skill.description)
+    ```
+  </Accordion>
+
+  <Accordion title="SkillLoader.discover(skills_dir)">
+    Scan a parent directory and load every subdirectory that contains a `SKILL.md`. Returns a list of `Skill` instances.
+
+    ```python
+    skills = SkillLoader.discover("/path/to/project/.agent/skills")
+    for skill in skills:
+        print(repr(skill))
+    ```
+  </Accordion>
+
+  <Accordion title="SkillLoader.discover_workspace_skills(workspace_root)">
+    Search all four convention directories (`.agent/skills/`, `_agent/skills/`, `.agents/skills/`, `_agents/skills/`) under `workspace_root` and return all discovered skills.
+
+    ```python
+    skills = SkillLoader.discover_workspace_skills("/path/to/project")
+    ```
+
+    This is the method called internally when you pass `workspace_root` to an `Agent` and load skills by string name.
+  </Accordion>
+</AccordionGroup>
+
+## Complete working example
+
+The following is a self-contained example of a custom `data_extractor` skill with two tools.
+
+<Steps>
+  <Step title="Create the SKILL.md">
+    ```markdown
+    ---
+    name: data_extractor
+    description: Extracts and normalizes structured data from unstructured text
+    version: 1.0.0
+    author: data-team
+    tags: [data, extraction, parsing]
+    requires: []
+    ---
+
+    When extracting data from text:
+    1. Identify all numeric values and their units.
+    2. Extract dates and normalize them to ISO 8601 format.
+    3. Return results as structured JSON.
+    4. Flag any ambiguous values for human review.
+    ```
+  </Step>
+
+  <Step title="Create scripts/tools.py">
+    ```python
+    import re
+    from typing import List
+
+
+    def extract_numbers(text: str) -> str:
+        """Extract all numeric values and their surrounding context from text."""
+        pattern = r'(\d+(?:\.\d+)?\s*(?:kg|lb|km|m|°C|°F|%|USD|EUR)?[^\n]{0,20})'
+        matches = re.findall(pattern, text)
+        return "\n".join(matches) if matches else "No numeric values found."
+
+
+    def normalize_date(date_string: str) -> str:
+        """Attempt to normalize a date string to ISO 8601 (YYYY-MM-DD) format."""
+        from datetime import datetime
+
+        formats = ["%B %d, %Y", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d %b %Y"]
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_string.strip(), fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return f"Could not parse date: {date_string}"
+    ```
+  </Step>
+
+  <Step title="Place in workspace">
+    ```text
+    /path/to/project/
+    └── .agent/
+        └── skills/
+            └── data_extractor/
+                ├── SKILL.md
+                └── scripts/
+                    └── tools.py
+    ```
+  </Step>
+
+  <Step title="Load and use">
+    ```python
+    from logicore.agents.agent import Agent
+
+    agent = Agent(
+        llm="ollama",
+        tools=True,
+        workspace_root="/path/to/project"
+    )
+    agent.load_skills(["data_extractor"])
+
+    response = await agent.chat(
+        "Extract the dates and numbers from this report: "
+        "Revenue was $1.2M in Q3 2024 (up 18% from September 1, 2023)."
+    )
+    print(response)
+    ```
+  </Step>
+</Steps>
+
+## Sharing and publishing skills
+
+Skills are plain directories — sharing them is as simple as copying the folder.
+
+<Columns cols={2}>
+  <Card title="Within a team" icon="users">
+    Commit the `.agent/skills/` directory to your repository. Every team member with `workspace_root` pointing at the repo root will discover the same skills automatically.
+  </Card>
+  <Card title="As a package" icon="package">
+    Distribute a skill as a Python package that places its skill directory into `logicore/skills/defaults/` on installation, making it available by name without a `workspace_root`.
+  </Card>
+</Columns>
+
+<Note>
+  Skills placed in `logicore/skills/defaults/` are resolved before workspace skills. If a workspace skill and a built-in skill share the same `name`, the built-in will take precedence.
+</Note>

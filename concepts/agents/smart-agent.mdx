@@ -1,0 +1,460 @@
+---
+title: "SmartAgent"
+description: "A project-aware agent with built-in tools, dual operating modes, and automatic learning capture."
+---
+
+`SmartAgent` extends `Agent` with a curated set of built-in tools and two operating modes: **solo** for broad, open-ended tasks and **project** for context-driven, codebase-specific work. It is the recommended choice when you want practical capabilities (web search, bash, notes, scheduling) without manually wiring each tool.
+
+```python
+from logicore.agents.agent_smart import SmartAgent, SmartAgentMode
+```
+
+---
+
+## Modes
+
+<Tabs>
+  <Tab title="Solo mode">
+    General-purpose chat and reasoning. The agent is not bound to any project context and can explore broadly.
+
+    - Ideal for discovery, brainstorming, and ad-hoc technical queries.
+    - Web search, bash, notes, datetime, cron, and memory tools are all available.
+    - No project context is injected — responses are scoped only by the conversation history.
+
+    ```python
+    agent = SmartAgent(llm="ollama", mode="solo")
+    response = await agent.chat("What are the latest Python packaging best practices?")
+    ```
+  </Tab>
+  <Tab title="Project mode">
+    Project-constrained reasoning. The agent's system prompt is enriched with the project's `goal`, `environment`, and `key_files`, steering every response toward that specific context.
+
+    - Ideal for sustained engineering work on a known codebase.
+    - Significant learnings (solutions, patterns, decisions) are automatically captured to project memory.
+    - Switch between projects with `switch_to_project(project_id)`.
+
+    ```python
+    agent = SmartAgent(llm="ollama", mode="project")
+    agent.create_project(
+        project_id="api-core",
+        title="API Core",
+        goal="Build stable authentication APIs",
+    )
+    agent.switch_to_project("api-core")
+    response = await agent.chat("Suggest an auth flow and test plan")
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## `SmartAgentMode` Constants
+
+```python
+class SmartAgentMode:
+    SOLO    = "solo"     # General chat, greater reasoning focus
+    PROJECT = "project"  # Project-centered with context awareness
+```
+
+Pass these constants — or their string equivalents — to the `mode` constructor parameter and to `set_mode()`.
+
+---
+
+## Built-in Tools
+
+`SmartAgent` loads a curated toolkit at initialization. Default tools are intentionally **not** loaded — the toolkit is lean and focused:
+
+| Tool | Category | Description |
+|---|---|---|
+| `web_search` | Web | Search the web and return results |
+| `image_search` | Web | Search for images with inline results |
+| `datetime` | Utility | Get current date and time |
+| `notes` | Utility | Create and retrieve persistent notes |
+| `memory` | Memory | Store and retrieve facts via RAG |
+| `bash` | Execution | Run shell commands |
+| `add_cron_job` | Scheduling | Schedule recurring tasks |
+| `list_cron_jobs` | Scheduling | List all scheduled jobs |
+| `remove_cron_job` | Scheduling | Cancel a scheduled job |
+| `get_crons` | Scheduling | Get cron job details |
+
+<Note>
+  You can extend the built-in toolkit with `register_tool_from_function()` or `add_custom_tool()` inherited from `Agent`. Custom tools are merged with the built-in set.
+</Note>
+
+---
+
+## Constructor
+
+```python
+SmartAgent(
+    llm: str | LLMProvider = "ollama",
+    model: str = None,
+    api_key: str = None,
+    mode: str = "solo",
+    project_id: str = None,
+    debug: bool = False,
+    telemetry: bool = False,
+    memory: bool = False,
+    max_iterations: int = 40,
+    capabilities: Any = None,
+    skills: list = None,
+    workspace_root: str = None,
+)
+```
+
+<ParamField path="llm" type="str or LLMProvider" default="ollama">
+  LLM provider. Pass a string shorthand (`"ollama"`, `"openai"`, `"gemini"`, `"groq"`, `"azure"`) or a `LLMProvider` instance. Determines backend routing for all model calls.
+</ParamField>
+
+<ParamField path="model" type="str" default="None">
+  Provider-specific model name. Always specify explicitly in production for consistent behavior.
+</ParamField>
+
+<ParamField path="api_key" type="str" default="None">
+  API key for cloud providers. Not required for `ollama`.
+</ParamField>
+
+<ParamField path="mode" type="str" default="solo">
+  Operating mode: `"solo"` or `"project"`. Controls the system prompt template and whether project context is injected. Can be changed at runtime via `set_mode()`, `switch_to_project()`, or `switch_to_solo()`.
+</ParamField>
+
+<ParamField path="project_id" type="str" default="None">
+  ID of an existing project to bind at initialization. When set alongside `mode="project"`, the agent immediately loads that project's context. Create projects with `create_project()` before using this.
+</ParamField>
+
+<ParamField path="debug" type="bool" default="False">
+  Verbose logging — prints tool names, mode switches, and learning capture events.
+</ParamField>
+
+<ParamField path="memory" type="bool" default="False">
+  Enable persistent memory indexing via `AgentrySimpleMem`. Independent of the built-in `memory` tool, which is always available for explicit RAG lookups.
+</ParamField>
+
+<ParamField path="max_iterations" type="int" default="40">
+  Maximum tool-call iterations per `chat()` call.
+</ParamField>
+
+<ParamField path="skills" type="list" default="None">
+  Additional skill names or `Skill` objects to load at startup.
+</ParamField>
+
+<ParamField path="workspace_root" type="str" default="None">
+  Root directory for filesystem and bash tools. Set this when the agent should only operate within a specific project directory.
+</ParamField>
+
+---
+
+## `chat()`
+
+```python
+await agent.chat(
+    user_input: str | list,
+    session_id: str = "default",
+    stream: bool = False,
+    generate_walkthrough: bool = False,
+    **kwargs,
+) -> str
+```
+
+Enhanced version of `Agent.chat()`. In project mode, it prepends the project's stored context to the session before calling the LLM. After a response, it scans for significant learnings and auto-stores them.
+
+<ParamField path="user_input" type="str or list" required>
+  User message. Accepts plain text or a multimodal content list.
+</ParamField>
+
+<ParamField path="session_id" type="str" default="default">
+  Conversation thread. Same ID preserves history across turns.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="False">
+  Enable token streaming with `on_token` callback.
+</ParamField>
+
+<ParamField path="generate_walkthrough" type="bool" default="False">
+  Append an LLM-generated execution summary.
+</ParamField>
+
+**Returns:** `str` — final assistant message.
+
+---
+
+## Project Management Methods
+
+### `create_project()`
+
+```python
+agent.create_project(
+    project_id: str,
+    title: str,
+    goal: str = "",
+    environment: dict[str, str] = None,
+    key_files: list[str] = None,
+) -> ProjectContext
+```
+
+Create a new project and persist it to project memory. Does not automatically switch to the project — call `switch_to_project()` after.
+
+```python
+agent.create_project(
+    project_id="api-core",
+    title="API Core",
+    goal="Build stable authentication APIs with FastAPI",
+    environment={"FRAMEWORK": "fastapi", "PYTHON": "3.12"},
+    key_files=["src/", "tests/", "pyproject.toml"],
+)
+```
+
+### `switch_to_project(project_id)`
+
+Load a project and switch to project mode. Rebuilds the system prompt with the project context.
+
+```python
+project = agent.switch_to_project("api-core")
+if project:
+    print(f"Switched to: {project.title}")
+```
+
+Returns the `ProjectContext` if found, `None` if the project ID does not exist.
+
+### `switch_to_solo()`
+
+Switch back to solo mode and clear the active project context.
+
+```python
+agent.switch_to_solo()
+```
+
+### `set_mode(mode, project_id=None)`
+
+Low-level mode switch. Updates the system prompt and all active sessions.
+
+```python
+agent.set_mode(SmartAgentMode.PROJECT, project_id="api-core")
+agent.set_mode(SmartAgentMode.SOLO)
+```
+
+### `list_projects()`
+
+Return all projects stored in project memory.
+
+```python
+for project in agent.list_projects():
+    print(f"{project.project_id}: {project.title}")
+```
+
+---
+
+## Memory Methods
+
+### `remember(memory_type, title, content, tags)`
+
+Store a memory entry directly without going through the LLM:
+
+```python
+await agent.remember(
+    memory_type="learning",
+    title="Auth middleware pattern",
+    content="Use JWT verification middleware before route handlers.",
+    tags=["auth", "fastapi"],
+)
+```
+
+### `recall(query, limit=5)`
+
+Search stored memories:
+
+```python
+entries = await agent.recall("authentication middleware", limit=3)
+for entry in entries:
+    print(entry.title, entry.content)
+```
+
+---
+
+## Reasoning Helper
+
+### `reason(problem, session_id)`
+
+Explicitly request step-by-step chain-of-thought reasoning for a complex problem:
+
+```python
+conclusion = await agent.reason(
+    "Should we use JWT or session cookies for our API auth layer?"
+)
+print(conclusion)
+```
+
+---
+
+## Status
+
+```python
+info: dict = agent.status()
+```
+
+Returns a dict with:
+
+| Key | Type | Description |
+|---|---|---|
+| `mode` | `str` | Current mode (`"solo"` or `"project"`) |
+| `project_id` | `str \| None` | Active project ID |
+| `project_title` | `str \| None` | Active project title |
+| `model` | `str` | Provider model name |
+| `tools_loaded` | `int` | Number of registered tools |
+| `sessions_active` | `int` | Number of live sessions |
+| `memory_entries` | `int` | Memory entries in active project |
+
+---
+
+## Automatic Learning Capture
+
+In project mode, `SmartAgent` scans each response for **significant learning indicators** and automatically stores qualifying snippets in project memory:
+
+```
+Learning indicators: "the solution is", "best practice", "key insight",
+                     "remember to", "the pattern is", "recommendation", ...
+```
+
+Casual responses (greetings, short confirmations) are filtered out. Only one learning is captured per response to avoid noise.
+
+<Note>
+  Auto-captured learnings are tagged `["auto-captured"]` and stored under the active `project_id`. Use `recall()` or the `memory` tool to retrieve them in future sessions.
+</Note>
+
+---
+
+## Examples
+
+<Tabs>
+  <Tab title="Solo mode">
+    ```python
+    from logicore.agents.agent_smart import SmartAgent
+    import asyncio
+
+    async def main():
+        agent = SmartAgent(llm="ollama", mode="solo")
+        response = await agent.chat("Find the latest Python async best practices")
+        print(response)
+
+    asyncio.run(main())
+    ```
+
+    The agent will use `web_search` to find current information and synthesize it into an answer.
+  </Tab>
+  <Tab title="Project mode">
+    ```python
+    from logicore.agents.agent_smart import SmartAgent
+    import asyncio
+
+    async def main():
+        agent = SmartAgent(llm="ollama", mode="project")
+
+        agent.create_project(
+            project_id="api-core",
+            title="API Core",
+            goal="Build stable authentication APIs with FastAPI",
+            environment={"FRAMEWORK": "fastapi", "PYTHON": "3.12"},
+            key_files=["src/", "tests/"],
+        )
+        agent.switch_to_project("api-core")
+
+        response = await agent.chat("Suggest an auth flow and test plan")
+        print(response)
+
+        # Show what was auto-learned
+        learnings = await agent.recall("authentication")
+        for entry in learnings:
+            print(f"  Learned: {entry.title}")
+
+    asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Mode switching">
+    ```python
+    from logicore.agents.agent_smart import SmartAgent
+    import asyncio
+
+    def on_token(token: str):
+        print(token, end="", flush=True)
+
+    async def main():
+        agent = SmartAgent(llm="ollama", mode="project")
+        agent.create_project("api-core", "API Core", goal="Build auth APIs")
+        agent.switch_to_project("api-core")
+
+        # Broad exploration in solo mode
+        agent.switch_to_solo()
+        await agent.chat(
+            "Summarize current industry patterns for API authentication",
+            stream=True,
+            callbacks={"on_token": on_token},
+        )
+        print()
+
+        # Return to project context for targeted work
+        agent.switch_to_project("api-core")
+        response = await agent.chat(
+            "Refine the auth design for our FastAPI project specifically"
+        )
+        print(response)
+
+    asyncio.run(main())
+    ```
+  </Tab>
+  <Tab title="Status & memory">
+    ```python
+    from logicore.agents.agent_smart import SmartAgent
+    import asyncio
+
+    async def main():
+        agent = SmartAgent(llm="ollama", mode="project")
+        agent.create_project("my-app", "My App", goal="Build a CLI tool")
+        agent.switch_to_project("my-app")
+
+        # Check agent state
+        info = agent.status()
+        print(f"Mode: {info['mode']}")
+        print(f"Project: {info['project_id']}")
+        print(f"Tools loaded: {info['tools_loaded']}")
+
+        # Store a manual memory
+        await agent.remember(
+            memory_type="learning",
+            title="CLI entry point",
+            content="Always define the main() function in src/cli.py",
+            tags=["cli", "structure"],
+        )
+
+        # Retrieve it
+        entries = await agent.recall("CLI entry point")
+        print(entries[0].content)
+
+    asyncio.run(main())
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Comparison: Solo vs. Project Mode
+
+| Aspect | Solo | Project |
+|---|---|---|
+| System prompt | Generic SmartAgent prompt | Project goal + environment + key files injected |
+| Learning capture | Off | On — significant learnings auto-stored |
+| Project context | None | Loaded from `ProjectMemory` on each `chat()` |
+| `recall()` scope | Global | Scoped to `project_id` |
+| Best for | Exploration, brainstorming | Sustained delivery work |
+
+---
+
+## Extends Agent
+
+`SmartAgent` inherits all methods from `Agent`:
+
+- `register_tool_from_function()`, `add_custom_tool()`, `load_skill()`
+- `get_session()`, `clear_session()`
+- `set_callbacks()`, `set_auto_approve_all()`
+- `get_execution_summary()`, `print_execution_summary()`
+
+See the [Agent reference](./agent) for full documentation of inherited methods.

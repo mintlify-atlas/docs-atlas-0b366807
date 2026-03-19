@@ -1,0 +1,525 @@
+---
+title: "Built-in Tools"
+description: "The full registry of tools that ship with Logicore, covering files, web, code execution, Git, documents, Office formats, PDFs, media, scheduling, and smart agent utilities."
+---
+
+Logicore ships a default registry of tools for the most common agent tasks. Enable them all with a single flag, or load them selectively.
+
+## Enabling built-in tools
+
+<Tabs>
+  <Tab title="At initialization">
+    ```python
+    from logicore import Agent
+
+    agent = Agent(
+        llm="ollama",
+        tools=True
+    )
+    ```
+  </Tab>
+  <Tab title="After initialization">
+    ```python
+    from logicore import Agent
+
+    agent = Agent(llm="ollama")
+    agent.load_default_tools()
+    ```
+  </Tab>
+</Tabs>
+
+Both paths load `ALL_TOOL_SCHEMAS` from the global `ToolRegistry` defined in `logicore/tools/registry.py`.
+
+## Tool categories
+
+### Filesystem
+
+Tools for reading, creating, editing, deleting, and searching files. `read_file` must be called before `edit_file`.
+
+<AccordionGroup>
+  <Accordion title="read_file">
+    Read file contents with an optional line range. Also tracks which files have been read, which `edit_file` requires.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the file. |
+    | `start_line` | `int` | No | Starting line number (1-indexed). |
+    | `end_line` | `int` | No | Ending line number (1-indexed). |
+
+    ```python
+    reply = await agent.chat("Read the first 20 lines of src/main.py")
+    ```
+  </Accordion>
+  <Accordion title="create_file">
+    Create a new file or directory. Will not overwrite an existing file unless `overwrite=true`.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path for the new file or directory. |
+    | `content` | `str` | Yes | File content. Use `""` for directories. |
+    | `file_type` | `str` | No | `"file"` (default) or `"directory"`. |
+    | `overwrite` | `bool` | No | Overwrite an existing file. Default `false`. |
+  </Accordion>
+  <Accordion title="edit_file">
+    Modify an existing file. Supports exact text replacement or line-range replacement. Requires `read_file` to have been called first.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the file to edit. |
+    | `new_text` | `str` | Yes | Replacement text. |
+    | `old_text` | `str` | No | Exact text to replace (required if not using line range). |
+    | `replace_all` | `bool` | No | Replace all occurrences. Default `false`. |
+    | `start_line` | `int` | No | Start line for range replacement (1-indexed). |
+    | `end_line` | `int` | No | End line for range replacement (1-indexed). |
+  </Accordion>
+  <Accordion title="delete_file">
+    Remove a file or directory. Requires `recursive=true` for non-empty directories.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to delete. |
+    | `recursive` | `bool` | No | Delete directories and their contents. Default `false`. |
+  </Accordion>
+  <Accordion title="list_files">
+    Browse directory contents. Supports glob patterns, recursive listing, and a visual tree view.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `directory` | `str` | No | Directory path. Default `"."`. |
+    | `pattern` | `str` | No | File glob pattern. Default `"*"`. |
+    | `recursive` | `bool` | No | List subdirectories. Default `false`. |
+    | `show_hidden` | `bool` | No | Include hidden files. Default `false`. |
+    | `tree` | `bool` | No | Return output as a visual tree. Default `false`. |
+    | `ignore_patterns` | `list` | No | Patterns to skip. Default excludes `__pycache__`, `.git`, `node_modules`, etc. |
+  </Accordion>
+  <Accordion title="search_files">
+    Find text patterns across files. Supports substring, regex, exact, and fuzzy matching.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `pattern` | `str` | Yes | Text or regex to search for. |
+    | `file_pattern` | `str` | No | Glob filter, e.g. `"*.py"`. Default `"*"`. |
+    | `directory` | `str` | No | Directory to search. Default `"."`. |
+    | `case_sensitive` | `bool` | No | Case-sensitive search. Default `false`. |
+    | `pattern_type` | `str` | No | `"substring"` (default), `"regex"`, `"exact"`, or `"fuzzy"`. |
+    | `max_results` | `int` | No | Cap on results. Default `100`. |
+    | `context_lines` | `int` | No | Lines of context around each match. Default `0`. |
+    | `group_by_file` | `bool` | No | Group results by filename. Default `false`. |
+  </Accordion>
+  <Accordion title="fast_grep">
+    Quick keyword or regex search across a directory. An alias for `search_files` with a simpler parameter set.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `keyword` | `str` | Yes | Keyword or regex pattern. |
+    | `directory` | `str` | No | Directory to search. Default `"."`. |
+    | `file_pattern` | `str` | No | Glob pattern to filter files. |
+  </Accordion>
+</AccordionGroup>
+
+### Execution
+
+<AccordionGroup>
+  <Accordion title="execute_command">
+    Run a shell command. Prefer the dedicated file tools for file manipulation.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `command` | `str` | Yes | Shell command to run. |
+    | `command_type` | `str` | No | `"bash"` (default), `"powershell"`, `"cmd"`, or `"python"`. |
+    | `working_directory` | `str` | No | Absolute path to run the command in. |
+    | `timeout` | `int` | No | Max execution time in seconds (1–300). Default `300`. |
+    | `ignore_error` | `bool` | No | Treat non-zero exit codes as success. Default `false`. |
+
+    ```python
+    reply = await agent.chat("Run pytest and show me the summary")
+    ```
+  </Accordion>
+  <Accordion title="code_execute">
+    Execute ephemeral Python code in an isolated subprocess. Use for calculations and data processing, not for file modifications.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `code` | `str` | Yes | Self-contained Python code to run. |
+    | `timeout` | `int` | No | Max execution time in seconds (1–300). Default `60`. |
+  </Accordion>
+</AccordionGroup>
+
+### Git
+
+<AccordionGroup>
+  <Accordion title="git_command">
+    Execute a git command. Do not include the `git` prefix.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `command` | `str` | Yes | Git subcommand and arguments, e.g. `"status"` or `"commit -m 'fix bug'"`. |
+    | `working_directory` | `str` | No | Absolute path to the repository root. |
+
+    ```python
+    reply = await agent.chat("Check git status and commit all changes with message 'chore: update deps'")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Web and fetch
+
+<AccordionGroup>
+  <Accordion title="web_search">
+    Search the internet using Google Custom Search. Requires `GOOGLE_API_KEY` and `GOOGLE_CX` environment variables.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `user_input` | `str` | Yes | Search query. Also accepts `query` as an alias. |
+    | `search_type` | `str` | No | `"quick"` (snippets only, default), `"detailed"` (fetches top 2 pages), or `"deep"` (LLM synthesis via Groq). |
+
+    ```python
+    reply = await agent.chat(
+        "Use web_search in detailed mode for 'python async best practices' and give me a short summary"
+    )
+    ```
+  </Accordion>
+  <Accordion title="url_fetch">
+    Fetch and extract clean text from a URL. Returns readable text, not raw HTML.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `url` | `str` | Yes | URL to fetch. |
+  </Accordion>
+  <Accordion title="image_search">
+    Search for images using Google Custom Search. Returns image URLs with thumbnails. Requires `GOOGLE_API_KEY` and `GOOGLE_CX`.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `query` | `str` | Yes | Image search query. |
+    | `num_images` | `int` | No | Number of images to return (1–10). Default `3`. |
+  </Accordion>
+</AccordionGroup>
+
+### Documents
+
+<AccordionGroup>
+  <Accordion title="read_document">
+    Read and extract content from PDF, DOCX, PPTX, XLSX, and other document formats.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Absolute path to the document. |
+    | `output_format` | `str` | No | `"markdown"` (default), `"text"`, or `"metadata"`. |
+  </Accordion>
+  <Accordion title="convert_document">
+    Convert a document from one format to another. Uses Pandoc where applicable. The output format is determined by the extension of `output_path`.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `input_path` | `str` | Yes | Absolute path to the source document. |
+    | `output_path` | `str` | Yes | Absolute path to the converted output. |
+  </Accordion>
+</AccordionGroup>
+
+### Office documents
+
+<AccordionGroup>
+  <Accordion title="create_pptx">
+    Create a new PowerPoint presentation.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path for the new `.pptx` file. |
+    | `title` | `str` | Yes | Presentation title. |
+    | `subtitle` | `str` | No | Subtitle or author name. |
+    | `slides` | `list` | No | List of `{"title": "...", "content": "..."}` dicts for content slides. |
+  </Accordion>
+  <Accordion title="edit_pptx">
+    Replace text in an existing PowerPoint file.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the `.pptx` file. |
+    | `old_text` | `str` | Yes | Text to find and replace. |
+    | `new_text` | `str` | Yes | Replacement text. |
+    | `slide_index` | `int` | No | Target a specific slide (0-indexed). Searches all slides if omitted. |
+    | `replace_all` | `bool` | No | Replace all occurrences. Default `true`. |
+  </Accordion>
+  <Accordion title="append_slide">
+    Add a new slide to an existing PowerPoint file.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the `.pptx` file. |
+    | `title` | `str` | Yes | Slide title. |
+    | `content` | `str` | Yes | Slide body text or bullet points. |
+    | `layout_index` | `int` | No | Slide layout index (0 = Title, 1 = Content). Default `1`. |
+  </Accordion>
+  <Accordion title="create_docx">
+    Create a new Word document.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path for the new `.docx` file. |
+    | `content` | `str` | Yes | Initial text content. |
+  </Accordion>
+  <Accordion title="edit_docx">
+    Replace text in an existing Word document. Also searches inside tables.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the `.docx` file. |
+    | `old_text` | `str` | Yes | Text to replace. |
+    | `new_text` | `str` | Yes | Replacement text. |
+  </Accordion>
+  <Accordion title="create_excel">
+    Create a new Excel workbook with a single sheet.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path for the new `.xlsx` file. |
+    | `sheet_name` | `str` | No | Name of the initial sheet. Default `"Sheet1"`. |
+  </Accordion>
+  <Accordion title="edit_excel">
+    Write a value to a specific cell in an Excel sheet.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `file_path` | `str` | Yes | Path to the `.xlsx` file. |
+    | `cell` | `str` | Yes | Cell coordinate, e.g. `"A1"`. |
+    | `value` | `str` | Yes | New cell value. |
+    | `sheet_name` | `str` | No | Target sheet name. Default `"Sheet1"`. |
+  </Accordion>
+</AccordionGroup>
+
+### PDF tools
+
+<AccordionGroup>
+  <Accordion title="merge_pdfs">
+    Merge multiple PDF files into a single PDF in the specified order.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `output_path` | `str` | Yes | Path for the merged output PDF. |
+    | `input_paths` | `list` | Yes | Ordered list of input PDF paths. |
+  </Accordion>
+  <Accordion title="split_pdf">
+    Split a PDF into individual per-page files saved to an output directory.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `input_path` | `str` | Yes | Path to the source PDF. |
+    | `output_dir` | `str` | Yes | Directory to save the split pages. |
+  </Accordion>
+</AccordionGroup>
+
+### Media
+
+<AccordionGroup>
+  <Accordion title="media_search">
+    Search for images and YouTube videos to embed inline in responses. Returns markdown-formatted media. Requires `GOOGLE_API_KEY` and `GOOGLE_CX`; optionally uses `YOUTUBE_API_KEY`.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `query` | `str` | Yes | Search query for finding media. |
+    | `media_type` | `str` | No | `"image"`, `"video"`, or `"both"` (default). |
+    | `num_results` | `int` | No | Results per type (1–5). Default `3`. |
+  </Accordion>
+</AccordionGroup>
+
+### Scheduling (cron)
+
+<AccordionGroup>
+  <Accordion title="add_cron_job">
+    Schedule a new recurring job with persistent storage and restart recovery.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `name` | `str` | Yes | Short name for the job. |
+    | `message` | `str` | Yes | Message delivered when the job fires. |
+    | `cron_expression` | `str` | Yes | 5-field cron expression: `minute hour day month weekday`, e.g. `"0 9 * * 1-5"`. |
+
+    ```python
+    reply = await agent.chat(
+        "Create a cron job named 'daily-standup' with cron '0 9 * * 1-5' "
+        "and message 'Post standup reminder'"
+    )
+    ```
+  </Accordion>
+  <Accordion title="list_cron_jobs">
+    List all scheduled cron jobs.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `include_disabled` | `bool` | No | Include disabled jobs. Default `false`. |
+  </Accordion>
+  <Accordion title="remove_cron_job">
+    Delete a scheduled job by its ID.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `job_id` | `str` | Yes | The job ID returned by `add_cron_job` or `list_cron_jobs`. |
+  </Accordion>
+  <Accordion title="get_crons">
+    Return structured cron metadata and the last five execution records for each active job as JSON.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `include_disabled` | `bool` | No | Include disabled jobs. Default `false`. |
+  </Accordion>
+</AccordionGroup>
+
+## Smart agent tools
+
+The following tools are defined in `logicore/tools/agent_tools.py` and used by `SmartAgent`. They can also be loaded manually.
+
+<AccordionGroup>
+  <Accordion title="datetime">
+    Get the current date and time or perform date formatting operations.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `operation` | `str` | No | `"now"` (default), `"format"`, `"parse"`, or `"diff"`. |
+    | `format_string` | `str` | No | strftime format string for `"format"` operation, e.g. `"%Y-%m-%d"`. |
+    | `timezone` | `str` | No | Timezone name, e.g. `"UTC"` or `"America/New_York"`. |
+
+    The `"now"` operation returns ISO, date, time, datetime, day of week, Unix timestamp, and human-readable strings.
+  </Accordion>
+  <Accordion title="notes">
+    Create, search, list, retrieve, and delete persistent notes. Notes are stored across sessions.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `action` | `str` | Yes | `"add"`, `"list"`, `"search"`, `"get"`, or `"delete"`. |
+    | `title` | `str` | No | Note title (required for `"add"`). |
+    | `content` | `str` | No | Note body (required for `"add"`). |
+    | `query` | `str` | No | Search string (required for `"search"`). |
+    | `note_id` | `int` | No | Note ID (required for `"get"` and `"delete"`). |
+    | `tags` | `list` | No | List of tag strings for categorization. |
+  </Accordion>
+  <Accordion title="memory">
+    Store and retrieve learned knowledge, approaches, and patterns using the project memory system.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `action` | `str` | Yes | `"store"`, `"search"`, `"list"`, `"export"`, or `"set_project"`. |
+    | `memory_type` | `str` | No | `"approach"`, `"learning"`, `"key_step"`, `"pattern"`, `"preference"`, `"decision"`, or `"context"`. Required for `"store"`. |
+    | `title` | `str` | No | Memory title (required for `"store"`). |
+    | `content` | `str` | No | Memory body (required for `"store"`). |
+    | `query` | `str` | No | Search query (required for `"search"`). |
+    | `project_id` | `str` | No | Project ID to associate with or filter by. |
+    | `limit` | `int` | No | Maximum results to return. Default `10`. |
+  </Accordion>
+  <Accordion title="bash">
+    Enhanced shell execution with optional learning capture. Wraps `execute_command` with the ability to store successful commands as project memories.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `command` | `str` | Yes | Shell command to execute. |
+    | `purpose` | `str` | No | Short description used as the memory title if `capture_learning` is true. |
+    | `working_dir` | `str` | No | Working directory for the command. |
+    | `timeout` | `int` | No | Timeout in seconds (1–300). Default `60`. |
+    | `capture_learning` | `bool` | No | Store the command as a `key_step` memory if it succeeds. Default `false`. |
+  </Accordion>
+  <Accordion title="think">
+    Structured reasoning and planning tool. Use before executing complex multi-step tasks to decompose the problem and formulate a strategy.
+
+    | Parameter | Type | Required | Description |
+    |---|---|---|---|
+    | `thought` | `str` | Yes | Reasoning, analysis, or thought process. |
+    | `conclusion` | `str` | No | The conclusion or execution roadmap reached after thinking. |
+
+    <Note>
+    `SmartAgent` loads `datetime`, `notes`, `memory`, and `bash` by default. `think` is available but intentionally excluded from the default `SmartAgent` load.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Usage examples
+
+<CodeGroup>
+
+```python file operations
+from logicore import Agent
+
+agent = Agent(llm="ollama", tools=True)
+
+reply = await agent.chat(
+    "Read docs/quickstart.md and create a 5-point setup checklist in docs/setup-checklist.md"
+)
+print(reply)
+```
+
+```python web research
+from logicore import Agent
+
+agent = Agent(llm="ollama", tools=True)
+
+reply = await agent.chat(
+    "Use web_search in detailed mode for 'python async best practices' and summarize the key points"
+)
+print(reply)
+```
+
+```python cron scheduling
+from logicore import Agent
+
+agent = Agent(llm="ollama", tools=True)
+
+reply = await agent.chat(
+    "Create a cron job named 'weekly-report' that runs every Monday at 9am "
+    "and sends the message 'Generate and send weekly report'"
+)
+print(reply)
+```
+
+```python code execution
+from logicore import Agent
+
+agent = Agent(llm="ollama", tools=True)
+
+reply = await agent.chat(
+    "Write and execute Python code to compute the first 20 Fibonacci numbers"
+)
+print(reply)
+```
+
+</CodeGroup>
+
+## Approval and safety model
+
+Built-in tools are pre-classified into three risk tiers:
+
+| Tier | Tools |
+|---|---|
+| **Safe** — no approval needed | `read_file`, `list_files`, `search_files`, `fast_grep`, `read_document`, `media_search`, `list_cron_jobs`, `get_crons` |
+| **Approval required** | `create_file`, `edit_file`, `web_search`, `image_search`, `url_fetch`, `convert_document`, `edit_pptx`, `create_pptx`, `append_slide`, `edit_docx`, `create_docx`, `edit_excel`, `create_excel`, `merge_pdfs`, `split_pdf`, `add_cron_job`, `remove_cron_job` |
+| **Dangerous** | `delete_file`, `execute_command`, `git_command`, `code_execute` |
+
+To disable approval checks in trusted environments:
+
+```python
+agent.set_auto_approve_all(True)
+```
+
+To implement custom approval logic, see the [approval workflow](/concepts/tools/tools-custom#tool-approval-workflow) section in the custom tools guide.
+
+## Environment variables
+
+| Variable | Required by |
+|---|---|
+| `GOOGLE_API_KEY` | `web_search`, `image_search`, `media_search` |
+| `GOOGLE_CX` | `web_search`, `image_search`, `media_search` |
+| `YOUTUBE_API_KEY` | `media_search` (optional; falls back to `GOOGLE_API_KEY`) |
+
+## File-to-tool map
+
+| Source file | Tool names |
+|---|---|
+| `filesystem.py` | `read_file`, `create_file`, `edit_file`, `delete_file`, `list_files`, `search_files`, `fast_grep` |
+| `execution.py` | `execute_command`, `code_execute` |
+| `web.py` | `web_search`, `url_fetch`, `image_search` |
+| `git.py` | `git_command` |
+| `document.py` | `read_document` |
+| `convert_document.py` | `convert_document` |
+| `office_tools.py` | `edit_pptx`, `create_pptx`, `append_slide`, `edit_docx`, `create_docx`, `edit_excel`, `create_excel` |
+| `pdf_tools.py` | `merge_pdfs`, `split_pdf` |
+| `media_search.py` | `media_search` |
+| `cron_tools.py` | `add_cron_job`, `list_cron_jobs`, `remove_cron_job`, `get_crons` |
+| `agent_tools.py` | `datetime`, `notes`, `memory`, `bash`, `think` |

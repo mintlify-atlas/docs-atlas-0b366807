@@ -1,0 +1,320 @@
+---
+title: "MCPAgent"
+description: "Complete reference for the MCPAgent class: constructor parameters, session management, tool registration, and the chat method."
+---
+
+`MCPAgent` is the enterprise-focused Logicore agent for large tool ecosystems. It extends the base `Agent` class with MCP server integration, named session lifecycle management, optional deferred tool loading, and session lifecycle callbacks.
+
+```python
+from logicore.agents.agent_mcp import MCPAgent
+```
+
+## Constructor
+
+```python
+MCPAgent(
+    provider: str | LLMProvider = "ollama",
+    model: str = None,
+    api_key: str = None,
+    endpoint: str = None,
+    system_message: str = "You are a helpful AI assistant with access to various tools.",
+    debug: bool = False,
+    telemetry: bool = False,
+    memory: bool = False,
+    max_iterations: int = 40,
+    session_timeout: int = 3600,
+    mcp_config_path: str = None,
+    mcp_config: dict = None,
+    deferred_tools: bool = False,
+    tool_threshold: int = 15,
+    skills: list = None,
+    workspace_root: str = None,
+)
+```
+
+### Parameters
+
+<ParamField path="provider" type="str or LLMProvider" default="ollama">
+  LLM backend. Pass a string shorthand (`"ollama"`, `"openai"`, `"groq"`, `"gemini"`, `"azure"`) or a pre-constructed `LLMProvider` instance.
+</ParamField>
+
+<ParamField path="model" type="str" default="None">
+  Model name to use with the selected provider (e.g. `"qwen2:7b"`, `"gpt-4o-mini"`). Falls back to the provider default when `None`.
+</ParamField>
+
+<ParamField path="api_key" type="str" default="None">
+  API key for cloud providers. Required when `provider` is `"openai"`, `"groq"`, `"gemini"`, or `"azure"`. Missing credentials will cause requests to fail.
+</ParamField>
+
+<ParamField path="endpoint" type="str" default="None">
+  Custom base URL. Required for Azure deployments; optional for self-hosted OpenAI-compatible endpoints.
+</ParamField>
+
+<ParamField path="system_message" type="str" default="You are a helpful AI assistant with access to various tools.">
+  System prompt applied to every new session.
+</ParamField>
+
+<ParamField path="debug" type="bool" default="false">
+  Print verbose internal logs covering MCP connection status, tool registration, deferred mode decisions, and session events.
+</ParamField>
+
+<ParamField path="telemetry" type="bool" default="false">
+  Enable telemetry tracking via `TelemetryTracker`.
+</ParamField>
+
+<ParamField path="memory" type="bool" default="false">
+  Enable memory / context middleware via `AgentrySimpleMem`.
+</ParamField>
+
+<ParamField path="max_iterations" type="int" default="40">
+  Maximum number of tool-call iterations per `chat()` call before the loop exits. Prevents runaway execution.
+</ParamField>
+
+<ParamField path="session_timeout" type="int" default="3600">
+  Seconds of inactivity after which a session is considered stale. Used by `cleanup_stale_sessions()`. Defaults to one hour.
+</ParamField>
+
+<ParamField path="mcp_config_path" type="str" default="None">
+  Path to an `mcp.json` file on disk. Passed directly to `MCPClientManager`. Provide either this or `mcp_config`, not both.
+</ParamField>
+
+<ParamField path="mcp_config" type="dict" default="None">
+  In-memory MCP server config dict (same schema as `mcp.json`). Takes precedence over `mcp_config_path` when both are given.
+</ParamField>
+
+<ParamField path="deferred_tools" type="bool" default="false">
+  Explicitly enable deferred tool loading regardless of tool count. When `True`, the model starts with only `tool_search_regex` and tools are loaded on demand.
+</ParamField>
+
+<ParamField path="tool_threshold" type="int" default="15">
+  Auto-enable deferred mode when total tools (default + MCP) reaches this number. Prevents context bloat in large tool catalogs.
+</ParamField>
+
+<ParamField path="skills" type="list" default="None">
+  List of skill names or `Skill` objects to load into the agent at startup.
+</ParamField>
+
+<ParamField path="workspace_root" type="str" default="None">
+  Root directory for workspace-based skill discovery.
+</ParamField>
+
+## chat()
+
+```python
+await agent.chat(
+    user_input: str,
+    session_id: str = "default",
+    create_if_missing: bool = True,
+    stream: bool = False,
+    streaming_funct: callable = None,
+    generate_walkthrough: bool = False,
+    **kwargs,
+) -> str | None
+```
+
+Process a message within a named session context. MCP servers are lazily initialized on the first call if `init_mcp_servers()` has not been called explicitly.
+
+<ParamField path="user_input" type="str" required>
+  The user's message to process.
+</ParamField>
+
+<ParamField path="session_id" type="str" default="default">
+  Identifies the session context. Each session has isolated conversation history.
+</ParamField>
+
+<ParamField path="create_if_missing" type="bool" default="true">
+  Automatically create the session if it does not exist. Set to `False` to require explicit `create_session()` calls.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="false">
+  Stream response tokens as they are generated rather than returning the complete response at the end.
+</ParamField>
+
+<ParamField path="streaming_funct" type="callable" default="None">
+  Callback receiving each token string during streaming. Only used when `stream=True`.
+</ParamField>
+
+<ParamField path="generate_walkthrough" type="bool" default="false">
+  Append a concise run summary to the response. Useful for audits and debugging.
+</ParamField>
+
+**Returns** `str | None` — the final assistant message, or `None` if the iteration limit was reached without a final response.
+
+<Warning>
+  A `None` return does not raise an exception. Handle it explicitly in production callers with retry or fallback logic.
+</Warning>
+
+## Session management methods
+
+### create_session()
+
+```python
+agent.create_session(
+    session_id: str,
+    system_message: str = None,
+    metadata: dict = None,
+) -> AgentSession
+```
+
+Create a named session with isolated conversation history. Fires the `on_session_created` callback if set.
+
+### destroy_session()
+
+```python
+agent.destroy_session(session_id: str) -> bool
+```
+
+Delete a session and free its resources. Returns `True` on success, `False` if the session was not found. Fires `on_session_destroyed` if set.
+
+### list_sessions()
+
+```python
+agent.list_sessions() -> list[dict]
+```
+
+Return a summary list for all active sessions. Each entry includes `session_id`, `message_count`, `created_at`, `last_activity`, and `metadata`.
+
+### cleanup_stale_sessions()
+
+```python
+agent.cleanup_stale_sessions() -> int
+```
+
+Destroy every session whose `last_activity` exceeds `session_timeout`. Returns the number of sessions removed.
+
+### set_session_callbacks()
+
+```python
+agent.set_session_callbacks(
+    on_session_created: callable = None,
+    on_session_destroyed: callable = None,
+)
+```
+
+Register callbacks for session lifecycle events. Both callbacks receive the `session_id` string.
+
+## Tool management methods
+
+### init_mcp_servers()
+
+```python
+await agent.init_mcp_servers()
+```
+
+Connect to all servers declared in `mcp_config_path` / `mcp_config`, discover their tools, and decide whether deferred mode should activate. Idempotent — safe to call multiple times.
+
+### register_tool_deferred()
+
+```python
+agent.register_tool_deferred(schema: dict, preload: bool = False)
+```
+
+Add a tool schema directly to the deferred registry. When `preload=True` the tool is also added to `_loaded_tools` so it is available immediately without a search step.
+
+### preload_tools()
+
+```python
+agent.preload_tools(tool_names: list[str])
+```
+
+Mark specific tools in the registry as loaded so they appear in the model's tool list without requiring a `tool_search_regex` call. Useful for high-frequency tools.
+
+### get_registry_stats()
+
+```python
+agent.get_registry_stats() -> dict
+```
+
+Return a snapshot of the tool registry:
+
+```python
+{
+    "total_registered": 42,
+    "loaded": 7,
+    "deferred": 35,
+    "deferred_mode": True,
+    "auto_deferred": True,
+    "threshold": 15,
+    "tool_names": ["read_file", "write_file", ...]
+}
+```
+
+## Examples
+
+<CodeGroup>
+
+```python Basic chat
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(provider="ollama", model="qwen2:7b")
+response = await agent.chat("Summarize Python async in simple terms")
+print(response)
+```
+
+```python Session-aware workflow
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(provider="ollama", session_timeout=1800)
+agent.create_session("team-1", metadata={"owner": "backend-team"})
+
+await agent.chat("Store design decisions from this discussion", session_id="team-1")
+response = await agent.chat("Recap our decisions", session_id="team-1")
+print(response)
+```
+
+```python With MCP config and deferred tools
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(
+    provider="openai",
+    model="gpt-4o-mini",
+    mcp_config_path="mcp.json",
+    deferred_tools=True,
+    tool_threshold=15,
+    debug=True,
+)
+
+await agent.init_mcp_servers()
+response = await agent.chat("Search file-related tools and read config files")
+print(response)
+```
+
+```python Session callbacks
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(provider="ollama")
+
+agent.set_session_callbacks(
+    on_session_created=lambda sid: print(f"Session created: {sid}"),
+    on_session_destroyed=lambda sid: print(f"Session destroyed: {sid}"),
+)
+
+agent.create_session("user-42", metadata={"tenant": "acme"})
+response = await agent.chat("Hello", session_id="user-42")
+```
+
+```python Stale session cleanup
+from logicore.agents.agent_mcp import MCPAgent
+
+agent = MCPAgent(provider="ollama", session_timeout=600)  # 10 min
+
+# ... run many sessions ...
+
+removed = agent.cleanup_stale_sessions()
+print(f"Removed {removed} stale sessions")
+
+active = agent.list_sessions()
+print(f"{len(active)} sessions still active")
+```
+
+</CodeGroup>
+
+## Inheritance from Agent
+
+`MCPAgent` inherits the following capabilities from the base `Agent` class without modification:
+
+- Internal tool execution (local Python functions)
+- `register_tool_from_function()` — overridden to also populate the deferred registry when deferred mode is active
+- Memory and telemetry middleware
+- Provider abstraction (`LLMProvider`)
+- `get_session()` / `AgentSession` base session model

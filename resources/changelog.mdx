@@ -1,0 +1,72 @@
+---
+title: "Changelog"
+description: "Full release history and documentation updates for the Logicore AI Framework."
+---
+
+## v1.0.3 — Current Release
+
+**Released:** 2026-03-16
+
+### Bug Fixes
+
+- Fixed Ollama provider issues related to custom tool call result handling. Responses from tool calls are now correctly parsed and returned to the model regardless of format variations in the Ollama response envelope.
+- Fixed tool call error handling where truncated error messages caused false failures. Errors are now fully preserved and reflected back to the LLM so it can recover gracefully.
+
+### New Features
+
+- Added a built-in cron job management tool (`add_cron_job`, `list_cron_jobs`, `remove_cron_job`, `get_crons`) so agents can natively schedule, inspect, and cancel recurring background tasks without external infrastructure.
+
+### Package Metadata
+
+- Package name: `logicore`
+- Version: `1.0.3`
+- License: MIT
+- Requires Python: `>=3.10`
+- Core dependencies: `pydantic>=2.0`, `requests>=2.28`, `python-dotenv>=1.0`
+- Supported providers (optional extras): `gemini`, `groq`, `ollama`, `azure`, `anthropic`, `mcp`
+
+---
+
+## Documentation Updates — 2026-03-16
+
+- Documented the new built-in cron tools and their usage in agents.
+- Updated Ollama provider reference to reflect fixed tool call result handling.
+
+---
+
+## Documentation Updates — 2026-03-14
+
+- Migrated full documentation site to Mintlify.
+- Aligned navigation layout across all concept, API reference, and resource sections.
+- Added provider comparison table and expanded concept guides for agents, tools, memory, and skills.
+
+---
+
+## Documentation Updates — 2026-03-06
+
+- Documented memory judge system internals, including the scoring and filtering pipeline used by `AgentrySimpleMem`.
+- Expanded API reference pages for agents, tools, and memory stores.
+
+---
+
+## v0.1.0 — Initial Release
+
+**Released:** 2026-03-04
+
+### Added
+
+- **Multi-provider support** — Gemini, Groq, Ollama, Azure OpenAI, and Anthropic, all accessible through a single unified agent API.
+- **Agent types** — `BasicAgent`, `Agent`, `SmartAgent`, `CopilotAgent`, and `MCPAgent`, covering use cases from simple chat to fully autonomous multi-tool workflows.
+- **Built-in tools** — File system operations, shell/code execution, web search and fetch, Git, PDF handling, Office document editing (Word, PowerPoint, Excel), and media search.
+- **MCP integration** — Model Context Protocol support for dynamic tool discovery via `MCPAgent` and `MCPClientManager`.
+- **Streaming** — Real-time token streaming with async callback support, including extraction of hidden `<think>` reasoning tokens from supporting models.
+- **Vision** — Multimodal image understanding across supported providers (Gemini, Azure GPT-4o, and others).
+- **Memory** — Session-scoped short-term memory and cross-session long-term memory powered by `AgentrySimpleMem` and LanceDB vector storage.
+- **Telemetry** — Full execution tracing and walkthrough generation via `TelemetryTracker`.
+- **Skills** — Modular, directory-based skill packs for domain-specific agent capabilities, loaded via `SkillLoader`.
+- **Hot reload** — Live code reloading during development via the `reloader` extra (`watchdog>=3.0`).
+- **Initial public documentation** — Quickstart, installation guide, agent and provider concept pages.
+
+<Warning>
+  v0.1.0 is an **alpha release** (`Development Status :: 3 - Alpha`). Public APIs may change between minor versions until a stable 1.x release is declared. Pin your dependency to a specific version in production.
+</Warning>
