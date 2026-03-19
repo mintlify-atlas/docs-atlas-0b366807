@@ -58,7 +58,7 @@ Write your agent logic once. Deploy it against any provider without changing a s
     Agents can schedule, manage, and execute their own background tasks without external infrastructure.
   </Card>
   <Card title="Skills and pre-built capabilities" icon="stars">
-    Load domain-specific skill packs instantly: web research, code review, file manipulation, and more.
+    Load domain-specific skill packs instantly: web research, code review, and custom skills you build yourself.
   </Card>
   <Card title="MCP integration" icon="plug">
     Connect to Model Context Protocol servers for dynamic external tools without any custom code.
@@ -112,7 +112,7 @@ async def main():
     agent.set_auto_approve_all(True)
 
     response = await agent.chat("What's the weather in Seattle?")
-    print(response["content"])
+    print(response)
 
 asyncio.run(main())
 ```

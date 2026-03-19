@@ -56,7 +56,7 @@ description: "Answers to common questions about installing, configuring, and usi
         provider = OllamaProvider(model_name="qwen3.5:0.8b")
         agent = Agent(llm=provider, role="Greeter")
         response = await agent.chat("Say hello!")
-        print(response['content'])
+        print(response)
 
     asyncio.run(main())
     ```

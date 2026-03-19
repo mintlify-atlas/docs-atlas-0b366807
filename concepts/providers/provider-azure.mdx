@@ -115,7 +115,7 @@ provider = AzureProvider(
         )
 
         result = await agent.chat("List 5 Azure governance best practices.")
-        print(result["content"])
+        print(result)
 
     asyncio.run(main())
     ```
@@ -141,7 +141,7 @@ provider = AzureProvider(
         )
 
         result = await agent.chat("Summarise the trade-offs of microservices vs monoliths.")
-        print(result["content"])
+        print(result)
 
     asyncio.run(main())
     ```
@@ -166,7 +166,7 @@ provider = AzureProvider(
         )
 
         result = await agent.chat("Explain the transformer architecture.")
-        print(result["content"])
+        print(result)
 
     asyncio.run(main())
     ```
@@ -221,7 +221,7 @@ agent = Agent(
 )
 
 result = await agent.chat("Does storage-account-prod comply with ISO-27001?")
-print(result["content"])
+print(result)
 ```
 
 <Note>
@@ -252,7 +252,7 @@ async def main():
     ]
 
     result = await agent.chat(message)
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```

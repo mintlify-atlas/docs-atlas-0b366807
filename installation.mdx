@@ -216,7 +216,7 @@ async def main():
     provider = OllamaProvider(model_name="qwen3.5:0.8b")
     agent = Agent(llm=provider, role="Greeter")
     response = await agent.chat("Say hello!")
-    print(response['content'])
+    print(response)
 
 if __name__ == "__main__":
     asyncio.run(main())

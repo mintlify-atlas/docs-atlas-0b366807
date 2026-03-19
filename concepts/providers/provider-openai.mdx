@@ -75,7 +75,7 @@ async def main():
     )
 
     result = await agent.chat("Explain event-driven architecture in simple terms.")
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
@@ -126,7 +126,7 @@ agent = Agent(
 )
 
 result = await agent.chat("What is the tax on $200 at 8.5%?")
-print(result["content"])
+print(result)
 ```
 
 When tools are provided, the provider sets `tool_choice="auto"` so the model decides when to call a tool.
@@ -152,7 +152,7 @@ async def main():
     ]
 
     result = await agent.chat(message)
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```

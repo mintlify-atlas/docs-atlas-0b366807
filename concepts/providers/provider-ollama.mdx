@@ -68,7 +68,7 @@ async def main():
     )
 
     result = await agent.chat("Summarize why local models are useful.")
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
@@ -124,7 +124,7 @@ agent = Agent(
 )
 
 result = await agent.chat("What's the weather in Tokyo?")
-print(result["content"])
+print(result)
 ```
 
 <Warning>
@@ -152,7 +152,7 @@ async def main():
     ]
 
     result = await agent.chat(message)
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```

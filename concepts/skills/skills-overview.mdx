@@ -21,7 +21,7 @@ Only `SKILL.md` is required. The `scripts/` directory is optional but necessary 
 
 ### The three layers of a skill
 
-<Columns cols={3}>
+<CardGroup cols={3}>
   <Card title="Instructions" icon="file-text">
     Markdown content in `SKILL.md` that is injected into the agent's system prompt inside `<skills>` tags, guiding model behavior for this domain.
   </Card>
@@ -31,13 +31,13 @@ Only `SKILL.md` is required. The `scripts/` directory is optional but necessary 
   <Card title="Metadata" icon="tag">
     YAML frontmatter in `SKILL.md` parsed into a `SkillMetadata` object: `name`, `description`, `version`, `author`, `tags`, and `requires`.
   </Card>
-</Columns>
+</CardGroup>
 
 ## Built-in skills
 
 Logicore ships two default skills in `logicore/skills/defaults/`. They are available by name in any agent without any additional setup.
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="web_research" icon="globe">
     Structured web research with multi-source verification. Guides the agent through query analysis, search, source cross-referencing, and synthesis with citations.
 
@@ -48,7 +48,7 @@ Logicore ships two default skills in `logicore/skills/defaults/`. They are avail
 
     **Tags:** `code`, `review`, `security`, `quality`
   </Card>
-</Columns>
+</CardGroup>
 
 ## Skills vs. tools
 
@@ -127,11 +127,11 @@ print(response)
 
 ## Next steps
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="Use skills in agents" icon="play" href="/concepts/skills/skills-use-in-agents">
     Load built-in and custom skills at agent creation or dynamically at runtime.
   </Card>
   <Card title="Build custom skills" icon="hammer" href="/concepts/skills/skills-build-custom">
     Create your own SKILL.md package with custom tool functions and register it in your workspace.
   </Card>
-</Columns>
+</CardGroup>

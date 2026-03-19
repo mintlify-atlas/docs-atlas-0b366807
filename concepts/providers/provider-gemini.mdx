@@ -79,7 +79,7 @@ async def main():
     )
 
     result = await agent.chat("Explain retrieval augmented generation in 4 lines.")
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
@@ -130,7 +130,7 @@ agent = Agent(
 )
 
 result = await agent.chat("What is the title of https://docs.logicore.ai?")
-print(result["content"])
+print(result)
 ```
 
 Function call IDs are formatted as `call_<function_name>` and tool results are returned to Gemini as `FunctionResponse` parts in the conversation history.
@@ -156,7 +156,7 @@ async def main():
     ]
 
     result = await agent.chat(message)
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```

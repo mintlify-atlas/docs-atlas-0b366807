@@ -33,11 +33,11 @@ from logicore.agents.agent import Agent
 import asyncio
 
 async def main():
-    # Pass a provider name as a string: "ollama", "gemini", "groq", "azure", "anthropic"
+    # Pass a provider name as a string: "ollama", "openai", "gemini", "groq", "azure"
     agent = Agent(llm="ollama")
 
     response = await agent.chat("What is an AI agent?")
-    print(response['content'])
+    print(response)
 
 asyncio.run(main())
 ```
@@ -108,7 +108,7 @@ async def main():
     )
 
     response = await agent.chat("What's the weather in Seattle?")
-    print(response['content'])
+    print(response)
 
 asyncio.run(main())
 ```
@@ -183,12 +183,12 @@ async def main():
         callbacks={"on_token": on_token},
         stream=True
     )
-    print("\nFinal:", response['content'])
+    print("\nFinal:", response)
 
 asyncio.run(main())
 ```
 
-The `on_token` callback fires for every token in the streaming response. `response['content']` still holds the complete assembled text when the call returns.
+The `on_token` callback fires for every token in the streaming response. `response` holds the complete assembled text when the call returns.
 
 </Step>
 
@@ -235,7 +235,7 @@ response2 = await agent.chat("How about New York?")
 
 # Turn 3 — agent compares both results from history
 response3 = await agent.chat("Which city is warmer?")
-print(response3['content'])
+print(response3)
 ```
 
 Each turn is appended to the session's message list. No extra configuration is needed for basic multi-turn use.
@@ -276,7 +276,7 @@ async def main():
         stream=True
     )
 
-    print("\n\nFinal response:", response['content'])
+    print("\n\nFinal response:", response)
 
 asyncio.run(main())
 ```
@@ -331,7 +331,7 @@ def my_tool(param: str, **kwargs) -> dict:
 |---|---|
 | Ollama | Run `ollama serve` to start the local server |
 | OpenAI | Set the `OPENAI_API_KEY` environment variable |
-| Azure | Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_KEY` |
+| Azure | Set `AZURE_ENDPOINT` and `AZURE_API_KEY` (or `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY`) |
 | Gemini | Set `GEMINI_API_KEY` |
 | Anthropic | Set `ANTHROPIC_API_KEY` |
 | Groq | Set `GROQ_API_KEY` |

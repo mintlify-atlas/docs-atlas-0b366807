@@ -177,7 +177,7 @@ async def main():
     )
 
     result = await agent.chat("What is retrieval-augmented generation?")
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
@@ -263,7 +263,7 @@ class InternalLLMProvider(LLMProvider):
 
 ## Provider pages
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="Ollama" icon="server" href="/concepts/providers/provider-ollama">
     Local models, air-gapped deployments, and free inference.
   </Card>
@@ -279,4 +279,4 @@ class InternalLLMProvider(LLMProvider):
   <Card title="Azure" icon="building" href="/concepts/providers/provider-azure">
     Enterprise Azure AI with OpenAI, Anthropic, and Inference backends.
   </Card>
-</Columns>
+</CardGroup>

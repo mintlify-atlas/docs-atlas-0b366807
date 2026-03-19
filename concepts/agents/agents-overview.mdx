@@ -50,7 +50,7 @@ All agents share a common loop:
 | Project mode | | | ✓ | | |
 | Coding convenience methods | | | | ✓ | |
 | MCP servers | | | | | ✓ |
-| RBAC & audit trails | | | | | ✓ |
+| Custom approval callbacks | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
@@ -78,10 +78,17 @@ All agents share a common loop:
 
     **Setup time: ~5 minutes**
   </Card>
-  <Card title="MCPAgent" icon="building" href="../mcp/mcp-agent">
-    **Best for:** Enterprise teams with many tools and governance requirements.
+  <Card title="CopilotAgent" icon="terminal" href="./agent">
+    **Best for:** Coding assistants, file operations, code review and generation.
 
-    Connects to MCP servers, enforces RBAC approval policies, and writes audit trails. Nothing is left out.
+    Pre-loaded with filesystem and execution tools, a coding-focused system prompt, and convenience methods: `explain_code()`, `review_file()`, `write_code()`, `fix_bug()`.
+
+    **Setup time: ~3 minutes**
+  </Card>
+  <Card title="MCPAgent" icon="building" href="../mcp/mcp-agent">
+    **Best for:** Workflows that require many external tools via MCP servers.
+
+    Connects to MCP servers for external tool integrations. Supports deferred tool loading to handle hundreds of tools without hitting context limits.
 
     **Setup time: ~10 minutes**
   </Card>
@@ -138,21 +145,46 @@ response = asyncio.run(agent.chat("Suggest an auth flow and test plan"))
 print(response)
 ```
 
+```python CopilotAgent
+from logicore.agents.copilot import CopilotAgent
+import asyncio
+
+async def main():
+    agent = CopilotAgent(llm="ollama", model="qwen2:7b")
+    agent.set_auto_approve_all(True)
+
+    # Convenience method: explain code
+    explanation = await agent.explain_code("def fib(n): return n if n < 2 else fib(n-1)+fib(n-2)", language="python")
+    print(explanation)
+
+    # Convenience method: write code
+    code = await agent.write_code("a function that reads a CSV and returns the row count", language="python")
+    print(code)
+
+asyncio.run(main())
+```
+
 ```python MCPAgent
 from logicore.agents.agent_mcp import MCPAgent
 import asyncio
 
-async def rbac_approval(session_id, tool_name, args):
-    sensitive = {"delete_records", "drop_table"}
-    return tool_name not in sensitive
+async def main():
+    async def approve_tool(session_id, tool_name, args):
+        # Block dangerous operations
+        dangerous = {"delete_file", "execute_command"}
+        return tool_name not in dangerous
 
-agent = MCPAgent(
-    llm="azure",
-    mcp_servers=["database", "file_system", "http_client"],
-)
-agent.set_callbacks(on_tool_approval=rbac_approval)
-response = asyncio.run(agent.chat("Summarize recent orders and save to report.txt"))
-print(response)
+    agent = MCPAgent(
+        provider="ollama",
+        mcp_config_path="mcp.json",  # Path to your MCP server config
+        debug=True,
+    )
+    agent.set_callbacks(on_tool_approval=approve_tool)
+    await agent.init_mcp_servers()
+    response = await agent.chat("List all available tools and summarize what they do.")
+    print(response)
+
+asyncio.run(main())
 ```
 
 </CodeGroup>
@@ -250,4 +282,4 @@ await agent2.chat("What is the deployment timeout?")
 - [BasicAgent](./basic-agent) — minimal setup, `@tool` decorator, factory function
 - [Agent](./agent) — constructor params, all methods, multi-session patterns
 - [SmartAgent](./smart-agent) — modes, built-in tools, project workflows
-- [MCPAgent](../mcp/mcp-agent) — MCP servers, RBAC, audit trails
+- [MCPAgent](../mcp/mcp-agent) — MCP servers, deferred tool loading, dynamic tool discovery

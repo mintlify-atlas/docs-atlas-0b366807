@@ -324,14 +324,14 @@ The following is a self-contained example of a custom `data_extractor` skill wit
 
 Skills are plain directories — sharing them is as simple as copying the folder.
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="Within a team" icon="users">
     Commit the `.agent/skills/` directory to your repository. Every team member with `workspace_root` pointing at the repo root will discover the same skills automatically.
   </Card>
   <Card title="As a package" icon="package">
     Distribute a skill as a Python package that places its skill directory into `logicore/skills/defaults/` on installation, making it available by name without a `workspace_root`.
   </Card>
-</Columns>
+</CardGroup>
 
 <Note>
   Skills placed in `logicore/skills/defaults/` are resolved before workspace skills. If a workspace skill and a built-in skill share the same `name`, the built-in will take precedence.

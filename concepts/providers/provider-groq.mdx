@@ -73,7 +73,7 @@ async def main():
     )
 
     result = await agent.chat("Give 3 tips to speed up API response times.")
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
@@ -120,7 +120,7 @@ agent = Agent(
 )
 
 result = await agent.chat("What is the current price of NVDA?")
-print(result["content"])
+print(result)
 ```
 
 Groq uses the same OpenAI-compatible tool-calling format. When tools are present, `tool_choice="auto"` is set automatically.
@@ -146,7 +146,7 @@ async def main():
     ]
 
     result = await agent.chat(message)
-    print(result["content"])
+    print(result)
 
 asyncio.run(main())
 ```
